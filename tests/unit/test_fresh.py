@@ -70,6 +70,18 @@ def test_cli_refuses_while_another_server_uses_the_directory(tmp_path, capsys):
 
 
 @pytest.mark.requirement("REQ-000000018")
+def test_a_server_that_exited_uncleanly_does_not_block_its_successor(tmp_path):
+    s = used_store(tmp_path / "d")
+    s.set_meta("running", "2026-10-24T06:00:00+00:00")
+    s.set_meta("heartbeat", datetime.now(timezone.utc).isoformat())
+    s.set_meta("exited", "2026-10-24T06:00:00+00:00")  # shutdown ran out of time with a step still busy
+    assert s.running_elsewhere() is None
+    assert s.get_meta("running") is not None  # the next start still reports "no clean stop"
+    s.set_meta("running", "2026-10-24T07:00:00+00:00")  # a new server marks itself running
+    assert s.running_elsewhere() == "2026-10-24T07:00:00+00:00"
+
+
+@pytest.mark.requirement("REQ-000000018")
 def test_start_fresh_option_and_its_short_form():
     parser = cli.build_parser()
     assert parser.parse_args(["serve", "--dry-run", "--start-fresh"]).start_fresh

@@ -618,6 +618,7 @@ class Server:
             th.join(max(0.0, deadline - time.monotonic()))
         busy = [th.name for th in self.threads if th.is_alive()]
         self.heartbeat()
+        self.store.set_meta("exited", self.started)  # the process is leaving: a restart must not wait for the marker to go stale
         if busy:
             self.store.log("server", f"stopped while {' '.join(busy)} still ran", "warning")
             return False

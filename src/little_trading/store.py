@@ -254,7 +254,7 @@ class Store:
         """When another server is using this directory (it marked itself running and its heartbeat is recent):
         its start time, else None. A crashed server's marker goes stale after `within_seconds`."""
         running, beat = self.get_meta("running"), self.get_meta("heartbeat")
-        if not running or not beat:
+        if not running or not beat or self.get_meta("exited") == running:  # that server has exited, cleanly or not
             return None
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(beat)).total_seconds()
         return running if age < within_seconds else None
