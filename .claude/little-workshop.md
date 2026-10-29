@@ -7,6 +7,19 @@ publishes and checks its policies at each step. Use the `little-workshop` MCP to
 Work on another project, policy authoring and project registration belong in a session started from
 `little-projects`.
 
+Image generation: little-workshop renders pictures on this machine's ComfyUI. Generate only when the user asked
+for images, or after asking the user and getting a yes; never on your own initiative. Choose the model for the
+picture with `workshop_generation_models` (purpose, licence, prompting, LoRAs; pass a purpose for a
+recommendation). `workshop_generation_submit` queues a set of prompts (batching, restarts and re-rendering grey
+outputs are its job) and asks for permission;
+`workshop_generation_wait` waits for the request, and `workshop_generation_download` writes the pictures into a
+folder of this project, checking every SHA-256. In an agent task it works only when the user allowed it for that
+task; otherwise say in the report which pictures you would generate. Resuming a paused queue and deleting
+little-workshop's copies are the user's decisions.
+The GPU is shared (ComfyUI, the Unity Editor, Blender, the desktop): before GPU work, read
+`workshop_generation_gpu` (usage level, who uses it, when the queue is idle) and decide whether to go ahead, wait
+or do other work first. It informs; nothing is locked.
+
 These are checked, not remembered. When one refuses something, its message says what to do instead:
 
 - Every commit: `.githooks/pre-commit` writes `VERSION` on `feature/` and `improvement/` branches, and

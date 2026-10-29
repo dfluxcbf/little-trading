@@ -1,3 +1,37 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+
+# Root BUILD - canonical targets per docs/policies/build_policy.md
+#
+#   bazel build //:all     -> every artifact
+#   bazel build //:wheel   -> the Python wheel
+#   bazel run   //:install -> pipx-install the wheel (`little-trading` on PATH)
+#   bazel run   //:serve -- --dry-run -> the dry-run server and web app (http://127.0.0.1:8765)
+
 package(default_visibility = ["//visibility:public"])
 
-# No build artifacts defined yet.
+exports_files(["VERSION"])
+
+alias(
+    name = "wheel",
+    actual = "//src/little_trading:wheel",
+)
+
+filegroup(
+    name = "all",
+    srcs = [":wheel"],
+)
+
+# pipx (not `pip install --user`) per the build policy's dependency isolation.
+py_binary(
+    name = "install",
+    srcs = ["tools/install_wheel.py"],
+    main = "tools/install_wheel.py",
+    data = ["//src/little_trading:wheel"],
+)
+
+py_binary(
+    name = "serve",
+    srcs = ["tools/serve_main.py"],
+    main = "tools/serve_main.py",
+    deps = ["//src/little_trading:lib"],
+)

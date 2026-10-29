@@ -1,0 +1,20 @@
+[project]
+name = "little-trading"
+version = "0.1.0"
+description = "Simulated automatic stock trading on live data, news and a local model (Jeff)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+lab = ["numpy"]  # the bake-off harness (python -m little_trading.lab)
+nn = ["numpy", "torch", "scikit-learn"]  # tree and neural alternatives; run from a separate virtual environment
+
+[project.scripts]
+little-trading = "little_trading.cli:main"
+little_trading = "little_trading.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests/unit"]
+markers = ["requirement(requirement_id): little-requirements requirement ID"]

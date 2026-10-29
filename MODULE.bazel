@@ -2,3 +2,12 @@ module(
     name = "little_trading",
     version = "0.1.0",
 )
+
+# rules_python: hermetic Python toolchain and py_wheel. The package has no third-party dependencies.
+bazel_dep(name = "rules_python", version = "1.7.0")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    python_version = "3.12",
+    is_default = True,
+)

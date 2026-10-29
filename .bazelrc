@@ -1,0 +1,4 @@
+# Common Bazel flags for little-trading.
+common --enable_bzlmod
+build --disk_cache=~/.cache/bazel/little-trading
+test --test_output=errors

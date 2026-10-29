@@ -1,0 +1,29 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:packaging.bzl", "py_wheel")
+
+package(default_visibility = ["//visibility:public"])
+
+py_library(
+    name = "lib",
+    srcs = glob(["**/*.py"], exclude = ["**/__pycache__/**"]),
+    imports = [".."],  # puts src/ on sys.path -> `import little_trading`
+)
+
+py_wheel(
+    name = "wheel",
+    distribution = "little_trading",
+    version = "0.1.0",  # keep in sync with VERSION
+    python_tag = "py3",
+    abi = "none",
+    platform = "any",
+    python_requires = ">=3.10",
+    summary = "Simulated automatic stock trading on live data, news and a local model (Jeff)",
+    entry_points = {
+        "console_scripts": [
+            "little-trading = little_trading.cli:main",
+            "little_trading = little_trading.cli:main",
+        ],
+    },
+    strip_path_prefixes = ["src/"],
+    deps = [":lib"],
+)
