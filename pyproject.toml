@@ -1,6 +1,6 @@
 [project]
 name = "little-trading"
-version = "0.1.1"
+version = "0.1.2"
 description = "Simulated automatic stock trading on live data, news and a local model (Jeff)"
 requires-python = ">=3.10"
 dependencies = []
