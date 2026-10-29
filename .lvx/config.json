@@ -58,6 +58,8 @@
     }
   },
   "delete_branch_on_finish": true,
-  "version_hooks": [],
+  "version_hooks": [
+    "tools/on_version_bump.py"
+  ],
   "stale_branch_days": 30
 }
