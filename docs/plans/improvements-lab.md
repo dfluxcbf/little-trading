@@ -142,6 +142,13 @@ module per service), next to the bake-off harness that stays in `src/little_trad
 
 ## 4. Steps
 
+**Status (2026-10-29):** L0 is built and tested on `feature/lab-service` (REQ-000000023): `little-trading lab ...`, the
+lab process, two services (`snapshot`, `shadow-champion`), the isolation check and the read-only Lab tab. It has been run end to
+end in a scratch data directory against the live database (read-only): 205 symbols, 387,837 bars, 96,800 headlines in 2 s, and a
+forward scoring of 2026-10-28 by noise, momentum and trees. The lab has **not** been created in the real data directory yet:
+that waits for the branch to be finished and deployed, because a lab started from a working tree would import whatever that
+tree contains.
+
 | Step | What | Output | Effort | Needs a decision |
 |---|---|---|---|---|
 | **L0** Lab service | `labctl`, supervisor, registry, scheduler, worker, per-service environments, isolation test, read-only Lab tab; services `snapshot` and `shadow-champion` as the first two | `little-trading lab ...` works end to end; tests green | M to L | none |

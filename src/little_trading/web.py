@@ -125,6 +125,13 @@ class Api:
         decisions = self.store.query("SELECT software, COUNT(*) AS n FROM decisions GROUP BY software")
         return {"boots": boots, "trades_by_version": per_version, "decisions_by_version": decisions}
 
+    def lab(self, q):
+        """The lab, read-only: its process state, services, last runs, trial ledger and gaps. The lab is a separate
+        process (REQ-000000023); this reads its registry and never starts, stops or changes anything."""
+        from . import labctl
+        from .lab.service.layout import Layout
+        return labctl.overview(Layout(self.store.directory))
+
     def universe(self, q):
         sel = self.store.get_meta("selection")
         days = self.store.query("SELECT day, COUNT(*) AS ranked, SUM(picked) AS picked FROM selections GROUP BY day"
@@ -145,7 +152,7 @@ class Api:
 def make_handler(api: Api):
     routes = {f"/api/{name}": getattr(api, name) for name in (
         "status", "equity", "positions", "trades", "latest", "decisions", "news", "models", "lessons", "events",
-        "evaluation", "symbol", "software", "universe", "report")}
+        "evaluation", "symbol", "software", "universe", "lab", "report")}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # the store logs what matters; keep stderr quiet

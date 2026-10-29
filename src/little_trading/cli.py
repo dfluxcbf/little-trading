@@ -105,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--trade-interval", type=_number(int, 60), default=900, metavar="SECONDS")
     sv.add_argument("--news-interval", type=_number(int, 60), default=900, metavar="SECONDS")
     sv.add_argument("--quiet", action="store_true", help="do not print events to the terminal (they are still logged)")
+    sub.add_parser("lab", help="manage the lab, a separate service that tests alternatives and improvements "
+                               "(little-trading lab --help)")
     rp = sub.add_parser("report", help="Markdown report of the dry-run server, for Claude")
     rp.add_argument("--data-dir")
     rp.add_argument("--days", type=_number(int, 1), default=7)
@@ -113,6 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "lab":  # the lab has its own command tree; it never touches the live database
+        from . import labctl
+        return labctl.main(argv[1:])
     args = build_parser().parse_args(argv)
     try:
         return _run(args)

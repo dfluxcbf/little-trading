@@ -607,6 +607,11 @@ class Server:
             th = threading.Thread(target=loop.run, args=(self.stop, self.store), name=loop.name, daemon=True)
             th.start()
             self.threads.append(th)
+        # The lab is a separate process (REQ-000000023): this only starts it when its schedule says autostart, and
+        # never raises. By default nothing happens.
+        from . import labctl
+        from .lab.service.layout import Layout
+        labctl.ensure_started(Layout(self.store.directory))
 
     def shutdown(self, timeout: float = 60.0) -> bool:
         """Stops the loops and waits for the running steps to finish. True when everything stopped in time, which

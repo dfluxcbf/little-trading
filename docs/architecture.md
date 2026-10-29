@@ -31,7 +31,8 @@ All under `src/little_trading/`, standard library only.
 | `web.py`, `webpage.py` | Read-only JSON API and the single-page web app |
 | `pwa.py` | What makes the web app installable on a phone: manifest, service worker, icons drawn as PNG |
 | `report.py` | Markdown report for Claude |
-| `cli.py` | `simulate`, `recommend`, `train`, `live`, `run`, `serve`, `report`; `--offline` for synthetic data |
+| `cli.py` | `simulate`, `recommend`, `train`, `live`, `run`, `serve`, `report`, `lab`; `--offline` for synthetic data |
+| `labctl.py` | Controls the lab from little-trading (create, start, stop, restart, delete, schedule, status); standard library only |
 
 ## Technical decisions
 
@@ -50,6 +51,28 @@ All under `src/little_trading/`, standard library only.
   calibration, naive Bayes counts; not the neighbours' shapes, which are rebuilt from prices).
 - The web page is a Python string (`webpage.py`) so the wheel needs no package data; it uses no CDN and
   escapes everything from feeds before display.
+
+## The lab (a separate service)
+
+The lab (`src/little_trading/lab/`) tests alternatives and improvements on one harness, beside the live system and never
+inside it (REQ-000000023, `docs/plans/improvements-lab.md`). `little-trading lab ...` (`labctl.py`) creates, starts, stops,
+restarts, deletes and schedules the **lab process**, which is detached from the live server (pid file, heartbeat and an
+`exited` marker in `<data dir>/lab/service/`), so a live deploy does not stop running lab jobs and a lab failure does not
+touch the live server. The lab manages **services**, one per alternative or improvement, with the same operations
+(`little-trading lab service create|start|stop|restart|delete|schedule|status|logs|runs`).
+
+- A service is a module under `lab/services/` with `run(ctx)`, a JSON config, an environment (`stdlib`, the shared `nn`
+  environment, or its own with exact pins), a schedule (every N, once, or weekdays after the US close; a missed slot is a
+  gap, never run late), resource caps (threads, memory, timeout, low priority) and its own SQLite output.
+- The lab process writes the run record and the trial ledger (`lab/service/registry.py`), so a service cannot skip being
+  counted. Services read only a published read-only snapshot of prices and news (service `snapshot`), never the live
+  database. A check (`lab/service/isolation.py`, run when a service is registered and again in the tests) follows every
+  import of a service and refuses it if it can reach the engine, server, store, web or data-fetching code.
+- Lab-wide caps: 8 threads and 5 GB by default, at low priority, so the live training round is not starved.
+- The live web app has a read-only Lab tab (`/api/lab`, read from the registry). Autostart with the live server is off by
+  default and never raises.
+- First services: `snapshot` and `shadow-champion` (forward scores of the control models, the yardstick for every other
+  scorer). The bake-off harness (`python -m little_trading.lab`) is unchanged.
 
 ## Dependencies
 

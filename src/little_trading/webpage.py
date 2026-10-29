@@ -71,7 +71,7 @@ svg text { fill: var(--muted); font-size: 11px; }
 <main id="main"></main>
 <script>
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});  // installable as a phone app
-const TABS = ["Overview", "Universe", "Decisions", "News", "Models", "Lessons", "Live evaluation", "Logs", "Software", "Report for Claude"];
+const TABS = ["Overview", "Universe", "Decisions", "News", "Models", "Lessons", "Live evaluation", "Logs", "Software", "Lab", "Report for Claude"];
 let tab = localStorageGet("tab") || "Overview", symbol = null;
 const COLORS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"].map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim());
 
@@ -258,6 +258,23 @@ const views = {
       <table><tr><th>Down from</th><th>To</th><th>Hours</th><th>Sessions missed</th><th>Stop</th></tr>${(s.downtimes || []).slice().reverse().map(d => `<tr><td>${when(d.from)}</td><td>${when(d.to)}</td><td>${d.hours}</td><td>${d.sessions_missed}</td><td class="${d.clean_stop === false ? "down" : ""}">${d.clean_stop === false ? "not clean" : d.clean_stop ? "clean" : "unknown"}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No restarts yet.</td></tr>'}</table></div>
       ${(s.fresh_starts || []).length ? `<div class="card"><h2>Fresh starts</h2><p class="muted">Each archived the dry run before it (--start-fresh); prices, news and model history were kept.</p><table><tr><th>At</th><th>Previous run from</th><th>Trades / decisions archived</th><th>Archive</th></tr>${s.fresh_starts.slice().reverse().map(f => `<tr><td>${when(f.at)}</td><td>${when(f.previous_started)}</td><td>${f.cleared.trades} / ${f.cleared.decisions}</td><td class="muted">${esc(f.archive)}</td></tr>`).join("")}</table></div>` : ""}
       <div class="card"><h2>Server starts</h2><table><tr><th>Started</th><th>Version</th><th>Symbols</th></tr>${sw.boots.map(b => `<tr><td>${when(b.ts)}</td><td>${esc(b.software)}</td><td class="muted">${esc((b.config.symbols || []).join(" "))}</td></tr>`).join("")}</table></div></div>`;
+  },
+
+  async "Lab"() {
+    const lab = await get("/api/lab");
+    const st = lab.lab || {};
+    const sched = s => s.kind === "daily_after_close" ? `weekdays, close + ${s.minutes} min` : s.kind === "every" ? `every ${s.seconds} s` : s.kind === "once" ? `once ${s.at}` : "off";
+    return `<div class="card"><h2>Lab</h2><p>The lab is a separate service that tests alternatives and improvements beside the live system. It never trades and never writes to this database. <span class="chip">${esc(st.state || "unknown")}</span>
+      <span class="muted">${lab.trials || 0} trials counted in the ledger. Controls are in the command line: <code>little-trading lab --help</code>.</span></p>
+      ${lab.error ? `<p class="down">${esc(lab.error)}</p>` : ""}</div>
+      <div class="card"><h2>Services</h2><table><tr><th>Service</th><th>Kind</th><th>Switched on</th><th>Schedule</th><th>Environment</th><th>Last run</th></tr>
+      ${(lab.services || []).map(v => `<tr><td><b>${esc(v.id)}</b><br><span class="muted">${esc(v.title)}</span></td><td>${esc(v.kind)}</td><td>${v.enabled ? "yes" : "no"}</td><td>${esc(sched(v.schedule))}</td><td>${esc(v.env)}</td>
+      <td>${v.last_run ? `<span class="chip">${esc(v.last_run.state)}</span> ${when(v.last_run.started_at)}<br><span class="muted">${esc(v.last_run.message || "")}</span>` : '<span class="muted">never</span>'}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">The lab has not been created (little-trading lab create).</td></tr>'}</table></div>
+      <div class="two"><div class="card"><h2>Trial ledger</h2><p class="muted">Every variant tried is counted, so a lucky result is discounted.</p><table><tr><th>When</th><th>Service</th><th>Variants</th><th>State</th></tr>
+      ${(lab.ledger || []).map(l => `<tr><td>${when(l.ts)}</td><td>${esc(l.service_id)}</td><td>${l.variants}</td><td>${esc(l.status)}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">No trials yet.</td></tr>'}</table></div>
+      <div class="card"><h2>Gaps</h2><p class="muted">Slots the lab missed. They are never run late: forward scoring must not use data the model could not have had.</p><table><tr><th>Service</th><th>Slot</th><th>Why</th></tr>
+      ${(lab.gaps || []).map(g => `<tr><td>${esc(g.service_id)}</td><td>${when(g.slot)}</td><td class="muted">${esc(g.reason)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">None.</td></tr>'}</table></div></div>
+      <div class="card"><h2>Lab events</h2><table>${(lab.events || []).map(e => `<tr><td class="muted" style="white-space:nowrap">${when(e.ts)}</td><td><span class="chip">${esc(e.kind)}</span></td><td>${esc(e.service_id || "")}</td><td>${esc(e.message)}</td></tr>`).join("")}</table></div>`;
   },
 
   async "Report for Claude"() {
