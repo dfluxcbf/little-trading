@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -41,6 +42,15 @@ class Ctx:
     @property
     def snapshot_path(self) -> Path:
         return self.snapshot_dir / "prices.db"
+
+    def scratch_copy(self) -> Path:
+        """A writable copy of the snapshot's prices inside this run's own directory, for work that alters data (a
+        leak check); the snapshot itself stays read-only."""
+        target = self.run_dir / "scratch" / "prices.db"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.snapshot_path, target)  # copyfile keeps no mode bits: the copy is writable
+        target.chmod(0o600)
+        return target
 
     def manifest(self) -> dict:
         return json.loads((self.snapshot_dir / "manifest.json").read_text())

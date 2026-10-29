@@ -259,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="little-trading lab", description="Manage the lab and its services.")
     p.add_argument("--data-dir", help="default ~/.local/share/little-trading")
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("create", "start", "stop", "restart", "ledger", "events"):
+    for name in ("create", "start", "stop", "restart", "events"):
         sub.add_parser(name)
     st = sub.add_parser("status")
     st.add_argument("--json", action="store_true")
@@ -268,6 +268,12 @@ def build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("schedule", help="autostart with the live server, and a UTC window for scheduled runs")
     sc.add_argument("--autostart", choices=["on", "off"])
     sc.add_argument("--window", help="HH:MM-HH:MM (UTC) in which scheduled runs may start, or off")
+    lg = sub.add_parser("ledger", help="show the trial ledger, or `seed` it from the bake-off runs")
+    lg.add_argument("action", nargs="?", choices=["seed"])
+    lg.add_argument("--from", dest="source", help="the bake-off database (default <data dir>/lab/lab.db)")
+    cd = sub.add_parser("card", help="check an experiment card")
+    cd.add_argument("action", choices=["check"])
+    cd.add_argument("file")
     gp = sub.add_parser("gaps")
     gp.add_argument("service", nargs="?")
     sv = sub.add_parser("service", help="manage one service")
@@ -359,6 +365,14 @@ def _run(a, layout: Layout) -> int:
                 if layout.exists:
                     print(_services_table([{**s, "state": "stopped" if not s["enabled"] else "scheduled",
                                             "schedule": s["schedule"].get("kind", "off")} for s in overview(layout)["services"]]))
+    elif c == "card":
+        from .lab import cards
+        problems = cards.check(Path(a.file).read_text())
+        print("\n".join(f"  {p}" for p in problems) if problems else "the card is complete")
+        return 1 if problems else 0
+    elif c == "ledger" and a.action == "seed":
+        r = _ask(layout, "ledger.seed", {"source": a.source})
+        print(f"seeded {r['added']} bake-off runs ({r['already']} were already counted); {r['trials']} trials counted")
     elif c == "ledger":
         r = _ask(layout, "ledger.list")
         print(f"{r['trials']} trials counted")

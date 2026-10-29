@@ -71,6 +71,11 @@ touch the live server. The lab manages **services**, one per alternative or impr
 - Lab-wide caps: 8 threads and 5 GB by default, at low priority, so the live training round is not starved.
 - The live web app has a read-only Lab tab (`/api/lab`, read from the registry). Autostart with the live server is off by
   default and never raises.
+- Foundations (REQ-000000024): `little-trading lab ledger seed` counts each run of the bake-off database as one trial
+  (once only; the file is only read). `lab/leakcheck.py` is the future-perturbation test: a feature or score function
+  must give the same output up to a cut when the later data is scrambled or deleted. `lab/cards.py` checks the
+  experiment card (`docs/lab/cards/TEMPLATE.md`, `little-trading lab card check FILE`) that is committed before a
+  variant runs. `Ctx.scratch_copy()` gives a service a writable copy of the snapshot in its own run directory.
 - First services: `snapshot` and `shadow-champion` (forward scores of the control models, the yardstick for every other
   scorer). The bake-off harness (`python -m little_trading.lab`) is unchanged.
 

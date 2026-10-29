@@ -142,12 +142,11 @@ module per service), next to the bake-off harness that stays in `src/little_trad
 
 ## 4. Steps
 
-**Status (2026-10-29):** L0 is built and tested on `feature/lab-service` (REQ-000000023): `little-trading lab ...`, the
-lab process, two services (`snapshot`, `shadow-champion`), the isolation check and the read-only Lab tab. It has been run end to
-end in a scratch data directory against the live database (read-only): 205 symbols, 387,837 bars, 96,800 headlines in 2 s, and a
-forward scoring of 2026-10-28 by noise, momentum and trees. The lab has **not** been created in the real data directory yet:
-that waits for the branch to be finished and deployed, because a lab started from a working tree would import whatever that
-tree contains.
+**Status (2026-10-29):** L0 is finished, deployed (0.1.5) and running (REQ-000000023): `little-trading lab ...`, the lab
+process, two services (`snapshot`, `shadow-champion`, scheduled weekdays 60 and 90 minutes after the US close), the isolation
+check and the read-only Lab tab. The lab runs from the deployed install, not from a working tree. The first scheduled runs
+are the evening of 2026-10-29. S0 (REQ-000000024) adds the seeded ledger, the card template and check, the
+future-perturbation helper and the scratch copy; after it is deployed, run `little-trading lab ledger seed` once.
 
 | Step | What | Output | Effort | Needs a decision |
 |---|---|---|---|---|

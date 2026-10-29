@@ -139,6 +139,27 @@ class Registry:
                      "note) VALUES (?,?,?,?,?,?,?,?,?)",
                      (now_iso(), service_id, run_id, hypothesis, variants, status, data_hash, code_version, note))
 
+    def seed_bakeoff(self, path: str | Path) -> dict:
+        """Counts every run of the bake-off database as one trial, once: the ledger starts from what was already looked
+        at, so the deflated Sharpe and the overfitting probability see the true number of tries."""
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = con.execute("SELECT id, ts, stage, alt, slot, win, seed, code, data FROM runs ORDER BY id").fetchall()
+        finally:
+            con.close()
+        known = {r["run_id"] for r in self.query("SELECT run_id FROM ledger WHERE service_id='bakeoff'")}
+        added = 0
+        for rid, ts, stage, alt, slot, win, seed, code, data in rows:
+            run_id = f"bakeoff-{rid}"
+            if run_id in known:
+                continue
+            self.execute("INSERT INTO ledger (ts, service_id, run_id, hypothesis, variants, status, data_hash, code_version, "
+                         "note) VALUES (?,?,?,?,?,?,?,?,?)",
+                         (ts, "bakeoff", run_id, f"{stage}: {alt} ({slot}, {win}, seed {seed})", 1, "seeded", data, code,
+                          "seeded from the bake-off database"))
+            added += 1
+        return {"added": added, "already": len(rows) - added, "source_runs": len(rows)}
+
     def ledger(self, limit: int = 100) -> list[dict]:
         return self.query("SELECT * FROM ledger ORDER BY id DESC LIMIT ?", (limit,))
 

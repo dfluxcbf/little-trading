@@ -500,6 +500,14 @@ class Supervisor:
     def cmd_ledger_list(self, limit: int = 50) -> dict:
         return {"trials": self.reg.trials(), "ledger": self.reg.ledger(int(limit))}
 
+    def cmd_ledger_seed(self, source: str | None = None) -> dict:
+        path = Path(source) if source else self.layout.data_dir / "lab" / "lab.db"
+        if not path.is_file():
+            raise ValueError(f"no bake-off database at {path}")
+        out = self.reg.seed_bakeoff(path)
+        self.reg.event("ledger", f"seeded from {path.name}: {out['added']} added, {out['already']} already counted")
+        return {**out, "trials": self.reg.trials()}
+
     def cmd_gaps_list(self, id: str | None = None) -> dict:
         return {"gaps": self.reg.gaps(id, 100)}
 
