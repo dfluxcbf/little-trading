@@ -1,0 +1,58 @@
+{
+ "_synthetic": "SYNTHETIC TEST FIXTURE: fabricated for little-trading's unit tests; not SEC data, the companies and CIKs are made up",
+ "0": {
+  "cik_str": 1000000000,
+  "ticker": "S0",
+  "title": "Synthetic Company 0 Inc (fabricated)"
+ },
+ "1": {
+  "cik_str": 1000000001,
+  "ticker": "S1",
+  "title": "Synthetic Company 1 Inc (fabricated)"
+ },
+ "2": {
+  "cik_str": 1000000002,
+  "ticker": "S2",
+  "title": "Synthetic Company 2 Inc (fabricated)"
+ },
+ "3": {
+  "cik_str": 1000000003,
+  "ticker": "S3",
+  "title": "Synthetic Company 3 Inc (fabricated)"
+ },
+ "4": {
+  "cik_str": 1000000004,
+  "ticker": "S4",
+  "title": "Synthetic Company 4 Inc (fabricated)"
+ },
+ "5": {
+  "cik_str": 1000000005,
+  "ticker": "S5",
+  "title": "Synthetic Company 5 Inc (fabricated)"
+ },
+ "6": {
+  "cik_str": 1000000006,
+  "ticker": "S6",
+  "title": "Synthetic Company 6 Inc (fabricated)"
+ },
+ "7": {
+  "cik_str": 1000000007,
+  "ticker": "S7",
+  "title": "Synthetic Company 7 Inc (fabricated)"
+ },
+ "8": {
+  "cik_str": 1000000008,
+  "ticker": "S8",
+  "title": "Synthetic Company 8 Inc (fabricated)"
+ },
+ "9": {
+  "cik_str": 1000000009,
+  "ticker": "S9",
+  "title": "Synthetic Company 9 Inc (fabricated)"
+ },
+ "10": {
+  "cik_str": 1000000099,
+  "ticker": "S29",
+  "title": "Blocked Example Corp (fabricated)"
+ }
+}
