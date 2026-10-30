@@ -175,7 +175,7 @@ def test_catalog_reads_stage_one_tree_parameters_or_falls_back(tmp_path):
     got = catalog.trees_params(tmp_path)
     assert got["max_depth"] == 6 and "seed" not in got
     d = catalog.definitions(tmp_path)
-    assert set(d) == {"snapshot", "shadow-champion"} and d["shadow-champion"]["config"]["trees_params"]["max_depth"] == 6
+    assert set(d) == {"snapshot", "shadow-champion", "k1-edge-needed"} and d["shadow-champion"]["config"]["trees_params"]["max_depth"] == 6
 
 
 @pytest.mark.requirement(REQ)

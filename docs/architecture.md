@@ -76,6 +76,8 @@ touch the live server. The lab manages **services**, one per alternative or impr
   must give the same output up to a cut when the later data is scrambled or deleted. `lab/cards.py` checks the
   experiment card (`docs/lab/cards/TEMPLATE.md`, `little-trading lab card check FILE`) that is committed before a
   variant runs. `Ctx.scratch_copy()` gives a service a writable copy of the snapshot in its own run directory.
+- `k1-edge-needed` (REQ-000000025, in the catalog, not created by `lab create`) plants a known edge and finds the smallest
+  rank IC at which each decision layer beats equal weight, by account size, gross and net of costs.
 - First services: `snapshot` and `shadow-champion` (forward scores of the control models, the yardstick for every other
   scorer). The bake-off harness (`python -m little_trading.lab`) is unchanged.
 

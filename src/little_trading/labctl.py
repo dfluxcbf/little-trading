@@ -102,12 +102,13 @@ def create(layout: Layout) -> dict:
     layout.ensure()
     layout.save_config(layout.config())
     reg = Registry(layout.registry_file)
-    for sid, d in catalog.definitions(layout.data_dir).items():
+    defs = {sid: d for sid, d in catalog.definitions(layout.data_dir).items() if sid in catalog.DEFAULT_SERVICES}
+    for sid, d in defs.items():
         reg.add_service({"id": sid, **d})
         layout.service_dir(sid).mkdir(parents=True, exist_ok=True)
     reg.event("lab", "lab created with the default services (switched off)")
     reg.close()
-    return {"root": str(layout.root), "services": list(catalog.definitions(layout.data_dir))}
+    return {"root": str(layout.root), "services": list(defs)}
 
 
 def start(layout: Layout, wait: float = 20.0) -> dict:

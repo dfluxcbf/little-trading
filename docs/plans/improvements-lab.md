@@ -153,7 +153,7 @@ future-perturbation helper and the scratch copy; after it is deployed, run `litt
 | **L0** Lab service | `labctl`, supervisor, registry, scheduler, worker, per-service environments, isolation test, read-only Lab tab; services `snapshot` and `shadow-champion` as the first two | `little-trading lab ...` works end to end; tests green | M to L | none |
 | **S0** Foundations | `trials` table, card template, future-perturbation test helper, scratch area for read-only clones | Ledger seeded with the 190 earlier runs | S | none |
 | **S1** Shadow scoring | The `snapshot` and `shadow-champion` services run daily; later `shadow-eval` fills in forward IC and paper returns when labels mature. Scorers plug in as they are built. **Start early: forward evidence only accumulates with time** | Daily log from day one; weekly paired report | M | none (scheduled by the lab) |
-| **K1** Edge-needed curve | Extend the planted-edge harness: IC 0.02 to 0.30 x account size x decision layer, gross and net; output the smallest IC at which each layer beats equal weight | A table that sets the real targets for everything below | S | none |
+| **K1** Edge-needed curve (built, see `docs/research/k1-edge-needed.md`) | Extend the planted-edge harness: IC 0.02 to 0.30 x account size x decision layer, gross and net; output the smallest IC at which each layer beats equal weight | A table that sets the real targets for everything below | S | none |
 | **X1** Cross-check | Port Alpha158 (MIT, with attribution); run Qlib's LightGBM on our panel in the service's own environment; compare against our trees on identical features, labels and folds | Score correlation and IC gap, with the cause of any gap | M | none (approved: the lab installs it) |
 | **R1** Review | Read the sources in section 6 in full (papers as PDFs saved to scratch, code from read-only clones) and write one note each: claim, evidence quality, transfer to US large caps and our costs, what we would test, verdict | `docs/research/notes/` | L, runs in parallel | none |
 | **B** Decision batch | H-D1 to H-D5 and O1, O2 (section 5) | `docs/research/improvements-decision.md` | M | none |
@@ -268,9 +268,10 @@ loses (the bake-off rule). Reports are generated from `lab.db`, never typed.
   correction are the defence; the weaker defence is that the selection window is partly used up.
 - **Transfer.** Most reported gains come from China, Japan, Turkey and Saudi Arabia, often before costs and on one path.
   Each is a hypothesis for US large caps, not a result.
-- **Cost wall.** If K1 shows that the IC needed at 10,000 SEK is far above anything any model reaches, the honest result
-  is that improvements in training cannot pay at this account size and the effort belongs in new information and the
-  account size.
+- **Cost wall.** Confirmed by K1 (`docs/research/k1-edge-needed.md`): net of costs the best top-10 layer needs a rank IC of
+  0.15 at 50,000 SEK and 0.30 at 10,000 SEK, against a best real IC of 0.034 in the bake-off. Improvements in training alone
+  cannot pay at this account size and cost model; the effort belongs in cheaper execution, fewer and larger trades, longer
+  horizons (H-I1, H-I2) and the account size. The next sensitivity is the broker class and the currency fee.
 - **Survivorship** flatters long-only results in every row, and the free data cannot fix it.
 - **Data terms.** SEC EDGAR is free and public but requires a declared contact in the request header and a polite
   request rate; nothing paid is used.

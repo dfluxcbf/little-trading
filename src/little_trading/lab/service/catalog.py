@@ -25,6 +25,9 @@ def trees_params(data_dir: Path) -> dict:
         return dict(TREES_FALLBACK)
 
 
+DEFAULT_SERVICES = ("snapshot", "shadow-champion")  # what `lab create` registers; the rest are added with --catalog
+
+
 def definitions(data_dir: Path) -> dict[str, dict]:
     live_db = str(Path(data_dir) / "little-trading.db")
     return {
@@ -47,5 +50,15 @@ def definitions(data_dir: Path) -> dict[str, dict]:
             "env": "nn",
             "schedule": {"kind": "daily_after_close", "minutes": 90},
             "resources": {**DEFAULT_RESOURCES, "threads": 4, "memory_mb": 3072, "timeout_s": 3600},
+        },
+        "k1-edge-needed": {
+            "title": "K1: the smallest planted edge at which each decision layer beats equal weight, by account size",
+            "hypothesis": "K1 (calibration: no real model is scored)",
+            "kind": "experiment",
+            "entry": "little_trading.lab.services.k1_edge_needed",
+            "config": {"seeds": [1, 2, 3, 4, 5]},
+            "env": "nn",
+            "schedule": {"kind": "none"},
+            "resources": {**DEFAULT_RESOURCES, "threads": 2, "memory_mb": 3072, "timeout_s": 7200},
         },
     }
