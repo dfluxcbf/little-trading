@@ -12,7 +12,7 @@ py_library(
 py_wheel(
     name = "wheel",
     distribution = "little_trading",
-    version = "0.1.6",  # keep in sync with VERSION
+    version = "0.1.7",  # keep in sync with VERSION
     python_tag = "py3",
     abi = "none",
     platform = "any",
