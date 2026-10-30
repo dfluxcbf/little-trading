@@ -175,7 +175,8 @@ def test_catalog_reads_stage_one_tree_parameters_or_falls_back(tmp_path):
     got = catalog.trees_params(tmp_path)
     assert got["max_depth"] == 6 and "seed" not in got
     d = catalog.definitions(tmp_path)
-    assert set(d) == {"snapshot", "shadow-champion", "k1-edge-needed", "k1-cost-sensitivity"} and d["shadow-champion"]["config"]["trees_params"]["max_depth"] == 6
+    assert {"snapshot", "shadow-champion", "k1-edge-needed", "k1-cost-sensitivity"} <= set(d) and d["shadow-champion"]["config"]["trees_params"]["max_depth"] == 6
+    assert all(e["config"]["trees_params"]["max_depth"] == 6 for e in d.values() if "trees_params" in e["config"])  # one baseline for every family
 
 
 @pytest.mark.requirement(REQ)
@@ -571,11 +572,12 @@ def business_days(start: date, n: int) -> list[date]:
     return out
 
 
-def make_live_db(path: Path, T: int = 420, N: int = 25, seed: int = 1, extra: tuple = ("NVDA",)) -> list[date]:
+def make_live_db(path: Path, T: int = 420, N: int = 25, seed: int = 1, extra: tuple = ("NVDA",),
+                 start: date = date(2025, 1, 2)) -> list[date]:
     """A stand-in for the live database: prices for N companies, SPY (the calendar), the SEK rate and a restricted issuer,
     plus the trading tables a service must never see."""
     rng = np.random.default_rng(seed)
-    days = business_days(date(2025, 1, 2), T)
+    days = business_days(start, T)
     con = sqlite3.connect(path)
     con.executescript(SCHEMA)
     for sym in [f"S{i}" for i in range(N)] + ["SPY", "SEK=X", *extra]:

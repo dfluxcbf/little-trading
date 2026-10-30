@@ -193,8 +193,12 @@ def test_a_family_reads_the_selection_window_once_and_never_the_holdout(tmp_path
     with pytest.raises(LookRefused, match="purpose"):
         ctx_for(root, "h-x", {"window": "selection"}, "r2").window("trees")
     assert ctx_for(root, "h-x", {"window": "selection", "purpose": "T2 confirm"}, "r3").window("trees") == window("selection")
-    with pytest.raises(LookRefused, match="already read"):
+    with pytest.raises(LookRefused, match="another purpose"):
         ctx_for(root, "h-y", {"window": "selection", "purpose": "again"}, "r4").window("trees")
+    with pytest.raises(LookRefused, match="already read"):
+        ctx_for(root, "h-x", {"window": "selection", "purpose": "T2 confirm"}, "r4b").window("trees")  # once per service
+    # another T1 candidate of the same family joins the same look, under the same purpose
+    assert ctx_for(root, "h-y", {"window": "selection", "purpose": "T2 confirm"}, "r4c").window("trees") == window("selection")
     assert ctx_for(root, "h-z", {"window": "selection", "purpose": "T2"}, "r5").window("decision layer")  # another family
     with pytest.raises(LookRefused, match="holdout"):
         ctx_for(root, "h-x", {"window": "holdout", "purpose": "peek"}, "r6").window("trees")
