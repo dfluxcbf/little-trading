@@ -78,6 +78,16 @@ touch the live server. The lab manages **services**, one per alternative or impr
   variant runs. `Ctx.scratch_copy()` gives a service a writable copy of the snapshot in its own run directory.
 - `k1-edge-needed` and `k1-cost-sensitivity` (REQ-000000025 and 026, in the catalog, not created by `lab create`) plant a known edge and find the smallest
   rank IC at which each decision layer beats equal weight, by account size, gross and net of costs.
+- `shadow-eval` (S1, REQ-000000027, in the catalog): when a stored forward score's label matures (the snapshot holds session
+  t + 5), it records the score's rank IC, the top-10 paper return gross and net of one round trip, and the equal-weight return
+  of the same names, reading no price after t + 5; it never rewrites an evaluated session and never fills a gap. It reads the
+  `shadow_scores` table of each scorer it is configured with (any later scorer that writes the same table plugs in) and
+  writes a weekly paired report (each model against the champion and against equal weight, per ISO week and over all
+  sessions) to `shadow_weekly` and `report.md`. `lab/compare.py` holds the paired statistics of the tier rules (daily IC,
+  paired t with the overlap correction, Benjamini-Hochberg, the block bootstrap) and `lab/hypothesis.py` the shared
+  decision and training families of steps B and T. `Ctx.window(family)` hands a run the development window, or the
+  selection window once per family (recorded in `<lab root>/looks.db`), and never the holdout; `Ctx.lab_setting(key)`
+  reads the lab's local `config.json`, the only place for a value that must stay off the repository (the EDGAR contact).
 - First services: `snapshot` and `shadow-champion` (forward scores of the control models, the yardstick for every other
   scorer). The bake-off harness (`python -m little_trading.lab`) is unchanged.
 

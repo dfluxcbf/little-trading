@@ -66,6 +66,16 @@ def definitions(data_dir: Path) -> dict[str, dict]:
             "schedule": {"kind": "daily_after_close", "minutes": 90},
             "resources": {**DEFAULT_RESOURCES, "threads": 4, "memory_mb": 3072, "timeout_s": 3600},
         },
+        "shadow-eval": {
+            "title": "S1: forward IC and paper returns of every stored score once its label matures; weekly paired report",
+            "hypothesis": "none (T3 evidence for every scorer: paired against the champion and equal weight)",
+            "kind": "scorer",
+            "entry": "little_trading.lab.services.shadow_eval",
+            "config": {"sources": ["shadow-champion"], "champion": "trees", "horizon": 5, "top_k": 10, "round_trip": 0.007},
+            "env": "nn",
+            "schedule": {"kind": "daily_after_close", "minutes": 120},
+            "resources": {**DEFAULT_RESOURCES, "threads": 1, "memory_mb": 1024, "timeout_s": 1800},
+        },
         "k1-edge-needed": {
             "title": "K1: the smallest planted edge at which each decision layer beats equal weight, by account size",
             "hypothesis": "K1 (calibration: no real model is scored)",

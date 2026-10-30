@@ -18,6 +18,10 @@ class Skip(Exception):
     """Raised by a service that has nothing to do (no new session, data not fresh): recorded as a success."""
 
 
+class LookRefused(RuntimeError):
+    """A run asked for a window it may not read (a second look at the selection window, or the holdout)."""
+
+
 class Ctx:
     def __init__(self, service_id: str, run_id: str, config: dict, service_dir: Path, run_dir: Path, snapshots_dir: Path,
                  threads: int = 1):
@@ -54,6 +58,48 @@ class Ctx:
 
     def manifest(self) -> dict:
         return json.loads((self.snapshot_dir / "manifest.json").read_text())
+
+    @property
+    def lab_root(self) -> Path:
+        return self.service_dir.parent.parent  # <lab root>/services/<id>
+
+    def lab_setting(self, key: str):
+        """One value of the lab's local config (`<lab root>/config.json`), which never leaves this machine: the place for
+        what must not be in a service's registered config or in the repository, such as the EDGAR contact."""
+        try:
+            return json.loads((self.lab_root / "config.json").read_text()).get(key)
+        except (OSError, ValueError):
+            return None
+
+    def window(self, family: str) -> tuple:
+        """The evaluation window this run may read (plan rule 8). Development unless the config asks for the selection
+        window, which each family may read once (`selection_look`); the holdout is never handed to a service."""
+        from ..splits import window
+        name = self.config.get("window", "development")
+        if name == "development":
+            return window(name)
+        if name == "selection":
+            self.selection_look(family, str(self.config.get("purpose") or ""))
+            return window(name)
+        raise LookRefused(f"a service may read the development or the selection window, not {name!r}: the holdout is "
+                          "read once, by hand, through HoldoutGuard")
+
+    def selection_look(self, family: str, purpose: str) -> None:
+        """Records the one look at the selection window that `family` may take, or refuses a second one."""
+        if not purpose:
+            raise LookRefused("a look at the selection window needs a purpose in the config (each family gets one)")
+        con = sqlite3.connect(self.lab_root / "looks.db", timeout=30)
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS looks (family TEXT PRIMARY KEY, service_id TEXT, run_id TEXT, "
+                        "purpose TEXT, ts TEXT)")
+            row = con.execute("SELECT service_id, run_id, ts FROM looks WHERE family=?", (family,)).fetchone()
+            if row:
+                raise LookRefused(f"the {family} family already read the selection window ({row[0]}, run {row[1]}, {row[2]})")
+            con.execute("INSERT INTO looks VALUES (?,?,?,?,?)", (family, self.service_id, self.run_id, purpose,
+                                                                 datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            con.commit()
+        finally:
+            con.close()
 
     # --- outputs ---------------------------------------------------------------------------------------------------
     def db(self) -> sqlite3.Connection:

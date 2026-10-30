@@ -148,6 +148,11 @@ check and the read-only Lab tab. The lab runs from the deployed install, not fro
 are the evening of 2026-10-29. S0 (REQ-000000024) adds the seeded ledger, the card template and check, the
 future-perturbation helper and the scratch copy; after it is deployed, run `little-trading lab ledger seed` once.
 
+**Status (2026-10-30, built in a sandbox, not deployed, no real-data run):** S1 `shadow-eval` (REQ-000000027) is built and
+tested on synthetic data; it starts producing rows five sessions after it is created on the user's machine. The commands for
+the user's machine, in order, are in `docs/lab/run-on-your-machine.md`; the requirement ids written in this branch, which
+little-workshop has not registered yet, are in `docs/lab/requirements-pending.md`.
+
 | Step | What | Output | Effort | Needs a decision |
 |---|---|---|---|---|
 | **L0** Lab service | `labctl`, supervisor, registry, scheduler, worker, per-service environments, isolation test, read-only Lab tab; services `snapshot` and `shadow-champion` as the first two | `little-trading lab ...` works end to end; tests green | M to L | none |
