@@ -271,7 +271,8 @@ loses (the bake-off rule). Reports are generated from `lab.db`, never typed.
 - **Cost wall.** Confirmed by K1 (`docs/research/k1-edge-needed.md`): net of costs the best top-10 layer needs a rank IC of
   0.15 at 50,000 SEK and 0.30 at 10,000 SEK, against a best real IC of 0.034 in the bake-off. Improvements in training alone
   cannot pay at this account size and cost model; the effort belongs in cheaper execution, fewer and larger trades, longer
-  horizons (H-I1, H-I2) and the account size. The next sensitivity is the broker class and the currency fee.
+  horizons (H-I1, H-I2) and the account size. The broker-class and currency-fee sensitivity (same note) moves the wall to 0.08 at 50,000 SEK and above and to 0.15 to 0.20
+  at 10,000 SEK under realistic cuts: still 2.5 to 6 times the best real model.
 - **Survivorship** flatters long-only results in every row, and the free data cannot fix it.
 - **Data terms.** SEC EDGAR is free and public but requires a declared contact in the request header and a polite
   request rate; nothing paid is used.

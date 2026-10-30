@@ -9,6 +9,21 @@ from pathlib import Path
 TREES_FALLBACK = {"max_depth": 4, "learning_rate": 0.05, "max_iter": 200, "l2_regularization": 1.0,
                   "min_samples_leaf": 1000}
 TREES_KEYS = tuple(TREES_FALLBACK)
+# K1 cost cases: where does the cost wall move if the fees change? (broker classes and the currency fee; see k1_edge_needed)
+K1_COST_CASES = {
+    "net": {"broker": "avanza-mini"},
+    "fx 0.10%": {"broker": "avanza-mini", "fx_fee": 0.001},
+    "fx 0%": {"broker": "avanza-mini", "fx_fee": 0.0},
+    "small": {"broker": "avanza-small"},
+    "medium": {"broker": "avanza-medium"},
+    "medium fx 0%": {"broker": "avanza-medium", "fx_fee": 0.0},
+    "no minimum": {"broker": "avanza-mini", "minimum_scale": 0.0},
+    "no courtage": {"broker": "avanza-mini", "courtage_scale": 0.0},
+    "fees x0.5": {"broker": "avanza-mini", "fee_scale": 0.5},
+    "fees x2": {"broker": "avanza-mini", "fee_scale": 2.0},
+    "slippage only": {"broker": "avanza-mini", "fee_scale": 0.0, "fx_fee": 0.0},
+    "gross": {"free": True},
+}
 DEFAULT_RESOURCES = {"threads": 2, "memory_mb": 1024, "timeout_s": 1800, "nice": 10}
 
 
@@ -57,6 +72,17 @@ def definitions(data_dir: Path) -> dict[str, dict]:
             "kind": "experiment",
             "entry": "little_trading.lab.services.k1_edge_needed",
             "config": {"seeds": [1, 2, 3, 4, 5]},
+            "env": "nn",
+            "schedule": {"kind": "none"},
+            "resources": {**DEFAULT_RESOURCES, "threads": 2, "memory_mb": 3072, "timeout_s": 7200},
+        },
+        "k1-cost-sensitivity": {
+            "title": "K1 again with other broker classes and currency fees: where does the cost wall move?",
+            "hypothesis": "K1 sensitivity (calibration: no real model is scored)",
+            "kind": "experiment",
+            "entry": "little_trading.lab.services.k1_edge_needed",
+            "config": {"seeds": [1, 2, 3], "layers": ["D1 top-10", "D1c cost-aware top-10", "D3 mean-variance"],
+                       "costs": K1_COST_CASES},
             "env": "nn",
             "schedule": {"kind": "none"},
             "resources": {**DEFAULT_RESOURCES, "threads": 2, "memory_mb": 3072, "timeout_s": 7200},

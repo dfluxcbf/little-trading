@@ -13,6 +13,7 @@ that would trade it cannot pay at that account size, whatever its t-statistic.
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from datetime import date
 
@@ -40,10 +41,25 @@ DEFAULTS = {
     "layers": ["D1 top-10", "D1c cost-aware top-10", "D2 Kelly 1/4", "D3 mean-variance", "D7 conformal abstain"],
     "spans": {"dev-a": ["2019-01-02", "2021-06-30"], "dev-b": ["2021-07-01", "2023-12-29"]},
     "rebalance": [5, 21],  # sessions between rebalances: the planted edge is about the next 5 sessions only
-    "broker": "avanza-mini",
-    "slippage": 0.0005,
+    # named cost cases: a broker class, optional overrides, and slippage; {"free": true} is no costs at all
+    "costs": {"net": {"broker": "avanza-mini", "slippage": 0.0005}, "gross": {"free": True}},
 }
 GROSS = B.Broker("gross", 0.0, 0.0, "USD", fx_fee=0.0)
+
+
+def make_cost(spec: dict) -> tuple[B.Broker, float]:
+    """(broker, slippage) of a cost case. `fx_fee` replaces the currency fee; `courtage_scale` scales the courtage rate and
+    its minimum; `minimum_scale` scales the courtage minimum alone (the $1 floor is about 1 % of a position in a 10,000 SEK
+    account); `fee_scale` scales the courtage and the currency fee together (the plan's 0.5x and 2x fee levels)."""
+    if spec.get("free"):
+        return GROSS, 0.0
+    broker = B.get(spec.get("broker", B.DEFAULT))
+    scale = float(spec.get("fee_scale", 1.0))
+    courtage = float(spec.get("courtage_scale", 1.0)) * scale
+    fx = float(spec["fx_fee"]) if "fx_fee" in spec else broker.fx_fee * scale
+    broker = dataclasses.replace(broker, rate=broker.rate * courtage, minimum=broker.minimum * courtage * float(spec.get("minimum_scale", 1.0)),
+                              fx_fee=fx)
+    return broker, float(spec.get("slippage", 0.0005))
 
 
 def layers() -> dict:
@@ -94,7 +110,7 @@ def evaluate(panel: Panel, cfg: dict, log=lambda m: None, on_cell=lambda cell: N
     cfg = {**DEFAULTS, **cfg}
     table = layers()
     chosen = {name: table[name] for name in cfg["layers"]}
-    net = B.get(cfg["broker"])
+    costs = {name: make_cost(spec) for name, spec in cfg["costs"].items()}
     idx = {s: (panel.index_of(date.fromisoformat(a)), panel.index_of(date.fromisoformat(b))) for s, (a, b) in cfg["spans"].items()}
     fwd = panel.label(decision.H, "relative")
     ew_ret, ew_sharpe = {}, {}
@@ -114,7 +130,7 @@ def evaluate(panel: Panel, cfg: dict, log=lambda m: None, on_cell=lambda cell: N
                 for account in cfg["accounts"]:
                     for span, (a, b) in idx.items():
                         for every in cfg["rebalance"]:
-                            for cost, broker, slip in (("net", net, cfg["slippage"]), ("gross", GROSS, 0.0)):
+                            for cost, (broker, slip) in costs.items():
                                 res = decision.backtest_weights(panel, layer, ctx, a, b, broker=broker, cash=float(account),
                                                                 rebalance_every=every, slippage=slip)
                                 ret = float(res.equity[-1] / res.equity[0] - 1.0)

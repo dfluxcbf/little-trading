@@ -144,3 +144,41 @@ def test_the_decision_context_at_a_session_never_depends_on_later_prices():
 
     leakcheck.assert_no_lookahead(context, arrays, cuts=(300, 450))
     assert np.isfinite(context(arrays)[450, :, 0]).any()  # the expected return exists at the cut, so the check looked at something
+
+
+# --- cost cases (REQ-000000026) ----------------------------------------------------------------------------------------
+@pytest.mark.requirement("REQ-000000026")
+def test_a_cost_case_sets_the_broker_the_currency_fee_the_courtage_scale_and_the_slippage():
+    from little_trading import broker as B
+    base = B.get("avanza-mini")
+    b, slip = K1.make_cost({"broker": "avanza-mini"})
+    assert (b.rate, b.minimum, b.fx_fee, slip) == (base.rate, base.minimum, base.fx_fee, 0.0005)
+    assert K1.make_cost({"broker": "avanza-mini", "fx_fee": 0.0})[0].fx_fee == 0.0
+    half = K1.make_cost({"broker": "avanza-mini", "fee_scale": 0.5})[0]
+    assert (half.rate, half.minimum, half.fx_fee) == (base.rate / 2, base.minimum / 2, base.fx_fee / 2)
+    assert K1.make_cost({"broker": "avanza-medium"})[0].rate == B.get("avanza-medium").rate
+    only_slip = K1.make_cost({"broker": "avanza-mini", "fee_scale": 0.0, "fx_fee": 0.0, "slippage": 0.001})
+    assert (only_slip[0].rate, only_slip[0].minimum, only_slip[0].fx_fee, only_slip[1]) == (0.0, 0.0, 0.0, 0.001)
+    nomin = K1.make_cost({"broker": "avanza-mini", "minimum_scale": 0.0})[0]
+    assert (nomin.rate, nomin.minimum, nomin.fx_fee) == (base.rate, 0.0, base.fx_fee)  # only the floor goes
+    nocourt = K1.make_cost({"broker": "avanza-mini", "courtage_scale": 0.0})[0]
+    assert (nocourt.rate, nocourt.minimum, nocourt.fx_fee) == (0.0, 0.0, base.fx_fee)
+    assert K1.make_cost({"free": True}) == (K1.GROSS, 0.0)
+    assert B.get("avanza-mini") == base  # the preset itself is never changed
+    with pytest.raises(ValueError):
+        K1.make_cost({"broker": "no-such-broker"})
+
+
+@pytest.mark.requirement("REQ-000000026")
+def test_cheaper_cost_cases_pay_less_and_every_case_is_recorded_under_its_own_name():
+    panel = synthetic(T=1500, N=60, seed=4)
+    costs = {"net": {"broker": "avanza-mini"}, "fx 0%": {"broker": "avanza-mini", "fx_fee": 0.0},
+             "fees x2": {"broker": "avanza-mini", "fee_scale": 2.0}, "gross": {"free": True}}
+    cfg = {"ics": [0.20], "seeds": [1], "accounts": [50_000], "layers": ["D1 top-10"], "spans": SPANS, "rebalance": [21],
+           "costs": costs}
+    by = {c["cost"]: c for c in K1.evaluate(panel, cfg)}
+    assert set(by) == set(costs)
+    per_krona = {n: c["fees"] / (c["turnover"] * 50_000) for n, c in by.items()}
+    assert per_krona["gross"] == 0 < per_krona["fx 0%"] < per_krona["net"] < per_krona["fees x2"]
+    assert by["gross"]["ret"] > by["fx 0%"]["ret"] > by["net"]["ret"] > by["fees x2"]["ret"]
+    assert set(K1.needed(list(by.values()))) == {("D1 top-10", 50_000.0, n, 21) for n in costs}

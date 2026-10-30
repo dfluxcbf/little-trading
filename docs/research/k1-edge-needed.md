@@ -55,16 +55,60 @@ On a Sharpe-ratio bar (more return per unit of risk than equal weight) the net t
 4. **The sizing layers do not help at this size.** D2, D3 and D7 hold cash and spread thinly, which loses to a rising
    market (equal weight returned +66 % over the spans on average) and loses more to whole shares and the courtage minimum.
 5. **Consequence for the plan.** Section 9's "cost wall" risk is real: improving the models' training alone cannot pay at
-   10,000 SEK with this broker model. The levers left are *fewer and larger trades* (hold longer only if the signal does), a
-   *cheaper way to trade* (the 0.25 % currency fee is charged each way and is the biggest single item: a USD account or a
-   cheaper class changes the answer and is the next sensitivity to run), a *bigger account*, and *new information* with a
-   longer horizon (earnings text, fundamentals: H-I1, H-I2), where an edge lasts longer than 5 sessions.
+   10,000 SEK with this broker model. The levers left are *fewer and larger trades*, *cheaper trading* (see the sensitivity
+   below: it helps, but not enough on its own), a *bigger account*, and *new information* with a longer horizon (earnings text,
+   fundamentals: H-I1, H-I2), where an edge lasts longer than 5 sessions.
+
+## Sensitivity: broker class and currency fee
+
+Service `k1-cost-sensitivity` (REQ-000000026; the same code with named cost cases; layers D1, D1c, D3; three seeds; the same
+spans and bar). The first version of this note called the 0.25 % currency fee the biggest single cost. **That was wrong at
+10,000 SEK**; the sensitivity shows why. Smallest planted rank IC that beats equal weight on return, D1 top-10, rebalancing
+every 5 sessions (D1c is identical to within one grid step):
+
+| Cost case | 10,000 SEK | 50,000 SEK | 250,000 SEK |
+|---|---|---|---|
+| gross (no costs, no slippage) | 0.03 | 0.02 | 0.02 |
+| slippage only (5 bp) | 0.03 | 0.03 | 0.02 |
+| no courtage (currency fee stays) | 0.15 | 0.08 | 0.08 |
+| no courtage minimum (rate stays) | 0.15 | 0.15 | 0.15 |
+| all fees halved | 0.15 | 0.08 | 0.08 |
+| currency fee 0 % | 0.20 | 0.08 | 0.08 |
+| currency fee 0.10 % | 0.30 | 0.10 | 0.10 |
+| **avanza-mini as modelled** | **0.30** | **0.15** | **0.15** |
+| avanza-small | never | 0.30 | 0.15 |
+| avanza-medium | never | 0.40 | 0.15 |
+| all fees doubled | 0.50 | 0.30 | 0.30 |
+
+Rebalancing every 21 sessions raises almost every row (for example 0.20 instead of 0.15 net at 50,000 SEK) and lowers none.
+D3 mean-variance needs at least as much as D1 in every row.
+
+What it says:
+
+1. **At 10,000 SEK the courtage minimum is the biggest item**, not the currency fee. The `avanza-mini` floor is 1 USD per
+   order, about 1 % of a 10-name position of 1,000 SEK, charged on every buy and sell. Removing the floor alone halves the
+   threshold (0.30 to 0.15); removing the currency fee alone only takes it to 0.20. At 50,000 SEK and above the floor does not
+   bind, and the courtage rate (0.25 %) and the currency fee (0.25 %) matter about equally (each removal takes 0.15 to 0.08).
+2. **The bigger broker classes are worse for a small account.** Their higher floors (6 and 8 USD) are charged on every order:
+   at 10,000 SEK nothing beats equal weight at any edge, and at 50,000 SEK they need 0.30 to 0.40. `avanza-mini` is already the
+   right class for these sizes.
+3. **Even free trading in every respect but slippage moves the wall only to where real models are** (0.02 to 0.03 against a
+   best real IC of 0.034, not significant). Every realistic cut (no currency fee, half the fees) stops at **0.08 for 50,000 SEK
+   and above** and **0.15 to 0.20 at 10,000 SEK**: 2.5 to 6 times the best real model.
+4. **So cheaper trading cannot rescue today's models, and the useful part of it is the cheapest to get.** A currency fee of
+   zero (money held in USD) or a lower fee on the same class is worth a factor of 1.5 to 2 in the threshold; a bigger account
+   is worth a factor of 2 at the same fees (0.30 to 0.15). Neither reaches 0.03.
+
+Combined with the K1 result, the plan's effort should go to information whose edge lasts long enough to trade rarely
+(H-I1, H-I2), and to trading less (a layer that only moves when the edge exceeds the round-trip cost, with positions held
+for the length of the edge), before any more model training.
 
 ## Limits
 
 - Planted edges are constant every day and exact; real edges come and go, so real thresholds are higher.
 - A rising market (2019-2023) favours equal weight over any layer that holds cash.
 - The universe is today's large caps (survivorship), which flatters every long-only row, equal weight included.
-- Costs are the `avanza-mini` class with a 0.25 % currency fee and 5 bp slippage; no other class or fee level is in this grid
-  (the broker is a config field: rerunning with another class is one service run).
+- The main table uses the `avanza-mini` class with a 0.25 % currency fee and 5 bp slippage; the sensitivity above varies the
+  class, the currency fee, the courtage and its floor, and halves and doubles all fees. Prices and classes are those in
+  `broker.py`, not a quote from a broker.
 - The learned sizing policies (D4, D6) are not included; the Stage 4 result for them stands.
