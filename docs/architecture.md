@@ -88,6 +88,16 @@ touch the live server. The lab manages **services**, one per alternative or impr
   decision and training families of steps B and T. `Ctx.window(family)` hands a run the development window, or the
   selection window once per family (recorded in `<lab root>/looks.db`), and never the holdout; `Ctx.lab_setting(key)`
   reads the lab's local `config.json`, the only place for a value that must stay off the repository (the EDGAR contact).
+- Steps X1, B, T, I and F (REQ-000000028 to 032, in the catalog, each added with `lab service create <id> --catalog`): one
+  service per idea of plan section 5, each with a committed card under `docs/lab/cards/`. Decision ideas (`h-d1` to `h-d5`,
+  `o1`, `o2`, `o3`) and training ideas (`h-t1` to `h-t6`, `o4`) run through the shared families of `lab/hypothesis.py`
+  against one baseline each and store `trial_cells` and `trial_verdicts`; config spans outside `Ctx.window` are refused.
+  `x1-qlib-check` compares our trees with Qlib's LightGBM on identical Alpha158 features (`lab/alpha158.py`, an MIT port),
+  labels and folds; `x1-qlib-native` runs Qlib itself in a Python 3.12 environment (a pinned environment may name its
+  interpreter). `h-i1`, `h-i2` and `h-i3` are studies; the EDGAR client (`lab/edgar.py`) takes its contact only from the
+  lab's local config, stays under 10 requests per second and drops restricted issuers before any request. `h-f1-kronos`,
+  `h-f1-timesfm` and `h-f1-chronos` are forward-only scorers that write `shadow_scores`, which `shadow-eval` evaluates; no
+  historical test of a foundation model counts.
 - First services: `snapshot` and `shadow-champion` (forward scores of the control models, the yardstick for every other
   scorer). The bake-off harness (`python -m little_trading.lab`) is unchanged.
 

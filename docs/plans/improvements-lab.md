@@ -151,7 +151,12 @@ future-perturbation helper and the scratch copy; after it is deployed, run `litt
 **Status (2026-10-30, built in a sandbox, not deployed, no real-data run):** S1 `shadow-eval` (REQ-000000027) is built and
 tested on synthetic data; it starts producing rows five sessions after it is created on the user's machine. The commands for
 the user's machine, in order, are in `docs/lab/run-on-your-machine.md`; the requirement ids written in this branch, which
-little-workshop has not registered yet, are in `docs/lab/requirements-pending.md`.
+little-workshop has not registered yet, are in `docs/lab/requirements-pending.md`. The same holds for X1 (REQ-000000028), R1 (notes in
+`docs/research/notes/`; every paper note says the paper was not reached from the sandbox), B (REQ-000000029,
+`docs/research/improvements-decision.md`), T (REQ-000000030, `docs/research/improvements-training.md`), I (REQ-000000031,
+`docs/research/improvements-information.md`; waits for the EDGAR contact, decision D1) and F (REQ-000000032,
+`docs/lab/foundation-models.md`). G (`docs/research/improvements-summary.md`): nothing has passed T1, because nothing has
+run on real data; no change is proposed.
 
 | Step | What | Output | Effort | Needs a decision |
 |---|---|---|---|---|
