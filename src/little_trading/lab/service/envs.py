@@ -4,16 +4,20 @@
 - "nn": the shared environment of the bake-off (numpy, torch, scikit-learn), `<data dir>/nn-venv` unless the lab
   config names another.
 - {"requirements": ["lightgbm==4.6.0", ...]}: a virtual environment of its own under the service's directory, with
-  every package pinned to an exact version. The installed set is frozen into `env.lock` beside it.
+  every package pinned to an exact version. The installed set is frozen into `env.lock` beside it. An optional
+  `"python": "python3.12"` (or an absolute path) builds it with that interpreter instead of the lab's own, for packages
+  that ship no wheel for the lab's Python (Qlib stops at 3.12).
 """
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import venv
 from pathlib import Path
 
+INTERPRETER = re.compile(r"^(python3(\.\d{1,2})?|/[\w./+-]+)$")
 PIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*(\[[A-Za-z0-9_,\-]+\])?==[A-Za-z0-9_.!+\-]+$")
 
 
@@ -28,6 +32,9 @@ def validate(env_spec) -> None:
         bad = [r for r in env_spec["requirements"] if not isinstance(r, str) or not PIN.match(r)]
         if bad:
             raise EnvError(f"every requirement must be pinned to an exact version (name==1.2.3): {bad}")
+        py = env_spec.get("python")
+        if py is not None and not (isinstance(py, str) and INTERPRETER.match(py)):
+            raise EnvError('"python" names an interpreter: python3.12 or an absolute path')
         return
     raise EnvError('an environment is "stdlib", "nn" or {"requirements": ["name==1.2.3", ...]}')
 
@@ -55,7 +62,13 @@ def resolve(env_spec, service_dir: Path, lab_config: dict, data_dir: Path, runne
         return str(py)
     venv_dir = service_dir / "venv"
     if not _bin(venv_dir).exists():
-        venv.EnvBuilder(with_pip=True, clear=False).create(venv_dir)
+        if env_spec.get("python"):
+            base = env_spec["python"] if env_spec["python"].startswith("/") else shutil.which(env_spec["python"])
+            if not base or not Path(base).exists():
+                raise EnvError(f"the interpreter {env_spec['python']} for this environment is not installed")
+            runner([base, "-m", "venv", str(venv_dir)])
+        else:
+            venv.EnvBuilder(with_pip=True, clear=False).create(venv_dir)
         runner([str(_bin(venv_dir)), "-m", "pip", "install", "--no-input", "--disable-pip-version-check",
                 *env_spec["requirements"]])
         (service_dir / "env.lock").write_text(runner([str(_bin(venv_dir)), "-m", "pip", "freeze"]) or "")
