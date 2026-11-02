@@ -1,6 +1,6 @@
 # Plan: strategies from market value and news
 
-Written 2026-11-01. Card: `docs/lab/cards/s1-strategies.md`. Service id: `s1-strategies` (not created, not run).
+Written 2026-11-01. Card: `docs/lab/cards/s1-strategies.md`. Service id: `s1-strategies`, run 2026-11-02: 0 of 6 pass (section 10).
 Rules and tiers: `docs/plans/improvements-lab.md`. Nothing here touches the live system or places an order.
 
 ## 1. Goal
@@ -244,3 +244,38 @@ sessions into gaps. The live server's daily job now stores the finished session 
 and ranks (REQ-000000034, `serve --no-refresh-universe` turns it off), about 2 minutes of extra requests. The 80 % limit is
 unchanged. It takes effect with the next deploy and is not yet proven on real bars: read `shadow_coverage` after the first
 evening. As a side effect the live ranking of the candidates sees the finished session, not the one before.
+
+## 10. Results (2026-11-02)
+
+Run `s1-strategies-20261102073507-0abe`, snapshot e721bc0d53de87b9, development only, written from `trial_cells`, `s1_report` and the run's stored result.
+Checks before scoring passed: no failed fetch, 4834 earnings events, of which 4760 have a press-release tone, and yearly
+event coverage of 89 % to 92 %. **0 of 6 pass T1, none is eligible for a selection look, and no combination is credited.**
+Spans are 2019-02-15 to 2021-05-14 (A) and 2021-05-17 to 2023-12-29 (B), at 10,000 SEK.
+
+Yardsticks: equal weight +62 % and +43 %, frictionless. SPY bought once in whole shares, the standard system since
+2026-11-02, +28 % and +26 %. The champion layer +67 % and -20 %, with fees of 3179 and 3809 SEK.
+
+| Strategy | Net A | Net B | Trades A / B | Fees A / B, SEK | Against champion, %/yr, A [90 %] | B [90 %] | Money over EW, %/yr, A, B | 63-session rank IC (t), A, B | Noise runs that matched or beat it on both spans |
+|---|---|---|---|---|---|---|---|---|---|
+| S1-VALUE | -13 % | +16 % | 15 / 21 | 192 / 319 | -26.7 [-56.1, -1.8] | +12.9 [-9.2, +39.8] | -24.1, -7.8 | -0.043 (-0.89), +0.055 (+0.82) | 245 of 400 |
+| S2-QUALITY | +27 % | +42 % | 15 / 13 | 216 / 188 | -11.5 [-39.9, +10.2] | +19.3 [-2.0, +44.4] | -10.2, -0.2 | -0.005 (-0.07), +0.074 (+1.10) | 87 of 400 |
+| S3-NEWS | +55 % | +98 % | 37 / 45 | 562 / 681 | -2.3 [-28.7, +21.4] | +34.4 [+5.7, +60.2] | -2.0, +13.3 | -0.051 (-1.20), -0.004 (-0.16) | 6 of 400 |
+| S4-BLEND | +37 % | -13 % | 35 / 43 | 503 / 629 | -7.4 [-41.2, +21.3] | +0.7 [-24.9, +29.2] | -7.3, -17.3 | -0.063 (-1.57), +0.036 (+0.82) | 177 of 400 |
+| S5-VETO | +26 % | +26 % | 23 / 21 | 326 / 344 | -8.8 [-37.2, +15.4] | +16.2 [-8.3, +43.2] | -10.6, -4.6 | -0.043 (-0.89), +0.055 (+0.82) | 130 of 400 |
+| S6-LEARNED | +36 % | -33 % | 23 / 43 | 328 / 568 | -8.4 [-28.6, +11.9] | -7.5 [-28.4, +17.4] | -7.4, -25.0 | +0.055 (+0.67), +0.005 (+0.10) | 193 of 400 |
+
+The noise layer: 200 fresh and 200 slow runs through `L5`. The fixed champion bar is now calibrated: noise passed it in 1 and 2 runs, so T1
+is not passed by saving fees alone. Noise's 90th percentile of money over EW is +10.8 and +7.5 %/yr fresh, +13.6 and +9.7 %/yr slow.
+A planted edge passed the champion bar as follows: fresh 0.05 0 of 5, slow 0.05 0 of 5, fresh 0.10 0 of 5, slow 0.10 0 of 5, fresh 0.30 1 of 5, slow 0.30 0 of 5. So the test has little power, as section 9 warned.
+
+Per-run comparison, a read-only calibration with the service's seeds, no trial spent: 129 of the 400 noise runs beat whole-share SPY on
+both spans, so beating SPY in this survivor universe is not a finding. Their median was +30 % and +28 % fresh, +40 % and +29 % slow.
+
+**S3-NEWS is the one result worth following, and it does not pass.** It beat SPY on both spans, and only 6 of 400 noise runs did as
+well on both. Against that: it fails T1 in span A; it trails equal weight in A; in A it sits at only the 66th to 75th noise percentile; its 63-session
+rank IC is negative on both spans, so it does not rank the list as a whole well, and the money rests on the few names at the top; six strategies were tried; and
+the designer knows this history. Results also move with the
+whole-share path: S3 made +94 % gross in B against +98 % net, because a few kronor change which share fits.
+
+**S1-VALUE**, the value model, lost money in A and sits at the 3rd to 4th noise percentile there. By plan section 8, nothing here moves to the
+live system. Next by the same table is forward shadow scoring of `S3-NEWS` on a new card, which is the user's decision. No tuning after a fail.

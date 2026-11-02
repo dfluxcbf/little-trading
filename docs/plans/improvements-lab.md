@@ -150,7 +150,7 @@ future-perturbation helper and the scratch copy; after it is deployed, run `litt
 
 **Status (2026-11-02):** S1, X1, R1, B, T and I have run on real data, development only, and nothing passes T1; X1 meets rule 5
 with the same settings on both sides. F runs forward for TimesFM and Chronos; Kronos has not started. `s1-strategies`
-(`docs/plans/strategies.md`) and the daily refresh (REQ-000000034) are built and wait for a deploy. See
+(`docs/plans/strategies.md`) ran with 0 of 6 passing, and the daily refresh (REQ-000000034) is deployed in 0.1.10. See
 `docs/research/improvements-summary.md`.
 
 **Earlier status (2026-10-30, built in a sandbox, not deployed, no real-data run):** S1 `shadow-eval` (REQ-000000027) is built and

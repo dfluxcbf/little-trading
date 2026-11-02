@@ -13,14 +13,14 @@ lab to standard. A lab strategy must now beat holding SPY, which is the bar equa
 
 | Step | Status | Tier reached | What it found, or why it stops |
 |---|---|---|---|
-| S1 `shadow-eval` | Running on its schedule | T3 started | A session counts only at 80 % coverage. The refresh that makes that reachable (REQ-000000034) is on the branch and needs a deploy |
+| S1 `shadow-eval` | Running on its schedule | T3 started | A session counts only at 80 % coverage. The refresh that makes that reachable (REQ-000000034) is deployed; the first evening will show whether it works |
 | K1 | Run on the real snapshot (`k1-edge-needed.md`) | calibration | A top-10 layer needs rank IC 0.15 to 0.30 net |
 | X1 | Ran on real data on real Qlib 0.9.7, three configurations | rule 5 met for the trees | Same settings on both sides agree (below). Qlib's published settings do not suit our data |
 | R1 notes | 11 paper notes from the papers, each checked by an independent reader | n/a | 9 full text; `ty80` and `zpqu` abstract only, verdict open. None moves K1 |
 | B (H-D1 to H-D5, O1, O2) | 7 services, 38 variants, run | T1 | 0 pass. No variant beats equal weight on both periods. H-D2, H-D4 and O2 almost never traded |
 | T (H-T1 to H-T6, O3, O4) | 8 services, 22 variants, run | T1 | 0 pass. Best IC +0.0103 (t of the difference +0.49) |
-| I (H-I1 to H-I3) | 3 studies, run | study | Nothing found, but H-I1 and H-I2 carry two data faults, so not a verdict |
-| S1 strategies (`s1-strategies`) | 6 variants, built, card committed, tests pass | T0 | Needs a deploy. The one test of value and news with the faults fixed |
+| I (H-I1 to H-I3) | 3 studies, run | study | Nothing found, but H-I1 and H-I2 carry two data faults, so not a verdict; `s1-strategies` reads the question again with them fixed |
+| S1 strategies (`s1-strategies`) | 6 variants, run with the data faults fixed | T1 | 0 pass, none eligible. S3-NEWS is worth following forward (`docs/plans/strategies.md`, section 10) |
 | F (H-F1) | TimesFM and Chronos started on 2026-11-02; Kronos not started | T3 started | Forward only: 60 sessions at least. Kronos waits on the user, because the permission check blocks the external clone |
 
 ## X1 and rule 5
@@ -49,8 +49,8 @@ best real model in the bake-off reached 0.034. So:
 
 ## What comes next
 
-1. **Gate:** a deploy brings the fixes, the daily refresh and `s1-strategies` to the lab. It restarts the live paper server.
-2. Run `s1-strategies` on development.
+1. Done on 2026-11-02: the deploy of 0.1.10 and the run of `s1-strategies`.
+2. **Gate:** forward shadow scoring of `S3-NEWS`, on a new card, if the user wants it.
 3. **Gate:** only a family with a T1 pass gets its one look at the selection window (2024-01 to 2025-06), with the user's
    go-ahead; the lab records the look and refuses a second.
 4. **Gate:** the holdout (2025-07-01 on) is read once, through `HoldoutGuard`, only when exactly one finalist exists and the
@@ -60,5 +60,5 @@ best real model in the bake-off reached 0.034. So:
 
 ## Trial count
 
-The lab's ledger holds 261 variants on 2026-11-02, the bake-off's included. `s1-strategies` adds 6. Any deflated Sharpe or PBO
+The lab's ledger holds 268 variants on 2026-11-02, the bake-off's and `s1-strategies`' included. Any deflated Sharpe or PBO
 computed later uses the full count at that time.
