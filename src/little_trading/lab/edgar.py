@@ -13,6 +13,8 @@ per second. So the client:
 - drops restricted issuers (little_trading.restricted) before any request: a restricted ticker, or a company whose name in
   SEC's ticker map matches a restricted name, is never looked up.
 - takes its transport (a function url -> bytes) from the caller, so tests run without a network; the default one is urllib.
+- tries a failed request up to `RETRIES` more times with a growing pause, each try through the rate limit. A document SEC
+  says does not exist (`NotFound`) is not retried. A failure is never cached, so a later run asks again.
 
 Endpoints: the ticker map (www.sec.gov/files/company_tickers.json), submissions (data.sec.gov/submissions/CIK##########.json),
 filing indexes and documents (www.sec.gov/Archives/edgar/data/...), and XBRL companyfacts
@@ -20,10 +22,12 @@ filing indexes and documents (www.sec.gov/Archives/edgar/data/...), and XBRL com
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import time
+import zlib
 from collections import deque
 from pathlib import Path
 from typing import Callable
@@ -32,6 +36,7 @@ from .. import restricted
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+SUBMISSIONS_PAGE_URL = "https://data.sec.gov/submissions/{name}"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{name}"
 CONTACT_KEY = "edgar_contact"
@@ -40,10 +45,19 @@ CONTACT_HINT = (f"set the key {CONTACT_KEY} in <data dir>/lab/service/config.jso
 MAX_RATE = 10.0
 DEFAULT_RATE = 5.0
 HOSTS = ("www.sec.gov", "data.sec.gov")
+RETRIES = 2
+BACKOFF_S = 1.0
 
 
 class ContactMissing(RuntimeError):
     """No EDGAR contact is configured: SEC asks every client to declare one, so nothing is fetched."""
+
+
+class NotFound(OSError):
+    """SEC has no such document (HTTP 404 or 410): asking again cannot help, and it says nothing about the network."""
+
+
+TRANSIENT = (OSError, http.client.HTTPException, EOFError, zlib.error)  # what a failed fetch can raise; NotFound is the exception
 
 
 class RateLimiter:
@@ -77,11 +91,17 @@ def urllib_transport(user_agent: str, timeout: float = 30.0) -> Callable[[str], 
     """The real transport: an HTTPS GET with the declared User-Agent (gzip accepted and undone)."""
     def fetch(url: str) -> bytes:
         import gzip
+        import urllib.error
         import urllib.request
         req = build_request(url, user_agent)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed https hosts only)
-            body = resp.read()
-            return gzip.decompress(body) if resp.headers.get("Content-Encoding") == "gzip" else body
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed https hosts only)
+                body = resp.read()
+                return gzip.decompress(body) if resp.headers.get("Content-Encoding") == "gzip" else body
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 410):
+                raise NotFound(f"{exc.code} {url}") from exc
+            raise
     return fetch
 
 
@@ -133,8 +153,17 @@ class Client:
         path = self.cache_path(url)
         if path.is_file() and (max_age_s is None or time.time() - path.stat().st_mtime <= max_age_s):
             return path.read_bytes()
-        self.limiter.wait()
-        body = self.transport(url)
+        for attempt in range(RETRIES + 1):
+            self.limiter.wait()
+            try:
+                body = self.transport(url)
+                break
+            except NotFound:
+                raise
+            except TRANSIENT:
+                if attempt == RETRIES:
+                    raise
+                self.limiter.sleep(BACKOFF_S * 2 ** attempt)
         self.fetched.append(url)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".part")
@@ -193,6 +222,28 @@ class Client:
     def submissions(self, cik: int, max_age_s: float | None = None) -> dict:
         return self.get_json(submissions_url(cik), max_age_s)
 
+    def all_filings(self, cik: int, max_age_s: float | None = None, since: str | None = None) -> list[dict]:
+        """Every filing of a company: `filings.recent` plus the older pages `filings.files` names (`recent` stops at about
+        1,000 filings, so a heavy filer's history would otherwise start late). A page wholly before the ISO date `since` is
+        not fetched. An older page never changes, so the cache keeps it. A page that cannot be fetched raises: a silent
+        hole in one company's history is what this replaces."""
+        subs = self.submissions(cik, max_age_s)
+        rows = recent_filings(subs)
+        for page in (subs.get("filings") or {}).get("files") or []:
+            if since and str(page.get("filingTo") or "9999") < since:
+                continue
+            try:
+                rows += filing_rows(self.get_json(submissions_page_url(page["name"])))
+            except NotFound as exc:  # SEC itself lists this page, so it is a hole and not a fact about the company
+                raise OSError(f"SEC lists {page['name']} but does not serve it") from exc
+        seen, out = set(), []
+        for f in rows:
+            acc = f.get("accessionNumber")
+            if acc not in seen:
+                seen.add(acc)
+                out.append(f)
+        return out
+
     def companyfacts(self, cik: int, max_age_s: float | None = None) -> dict:
         return self.get_json(companyfacts_url(cik), max_age_s)
 
@@ -206,6 +257,12 @@ class Client:
 
 def submissions_url(cik) -> str:
     return SUBMISSIONS_URL.format(cik=cik_int(cik))
+
+
+def submissions_page_url(name: str) -> str:
+    if not re.fullmatch(r"CIK\d{10}-submissions-\d+\.json", str(name)):
+        raise ValueError(f"not a submissions page: {name!r}")
+    return SUBMISSIONS_PAGE_URL.format(name=name)
 
 
 def companyfacts_url(cik) -> str:
@@ -229,23 +286,35 @@ def client_for(ctx, transport: Callable[[str], bytes] | None = None, clock=None,
 
 
 # --- parsing helpers shared by the services -------------------------------------------------------------------------------
+def filing_rows(columns: dict) -> list[dict]:
+    """The column arrays of a submissions page as one dict per filing."""
+    keys = [k for k, v in columns.items() if isinstance(v, list)]
+    n = min((len(columns[k]) for k in keys), default=0)
+    return [{k: columns[k][i] for k in keys} for i in range(n)]
+
+
 def recent_filings(submissions: dict) -> list[dict]:
-    """The column arrays of `filings.recent` as one dict per filing (older pages, `filings.files`, are not followed)."""
-    rec = (submissions.get("filings") or {}).get("recent") or {}
-    keys = [k for k, v in rec.items() if isinstance(v, list)]
-    n = min((len(rec[k]) for k in keys), default=0)
-    return [{k: rec[k][i] for k in keys} for i in range(n)]
+    """The filings of `filings.recent` (older pages, `filings.files`, are not followed: `Client.all_filings` does that)."""
+    return filing_rows((submissions.get("filings") or {}).get("recent") or {})
 
 
-def exhibit_from_index(index_html: str, kind: str = "EX-99.1") -> str | None:
-    """The file name of the first document of type `kind` in a filing index page, or None."""
+def exhibit_from_index(index_html: str, kind: str = "EX-99.1", prefix: bool = False) -> str | None:
+    """The file name of the first document of type `kind` in a filing index page, or None. With `prefix`, a type that
+    starts with `kind` also counts."""
+    want = kind.upper()
     for row in re.findall(r"<tr[^>]*>(.*?)</tr>", index_html, flags=re.S | re.I):
         cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.S | re.I)]
-        if any(c.upper() == kind.upper() for c in cells):
+        if any(c.upper() == want or (prefix and c.upper().startswith(want)) for c in cells):
             href = re.search(r'href="([^"]+)"', row, flags=re.I)
             if href:
                 return href.group(1).rsplit("/", 1)[-1]
     return None
+
+
+def press_release_from_index(index_html: str) -> str | None:
+    """The press release of an earnings 8-K: EX-99.1, else EX-99, else the first other EX-99.x (a filer's own numbering)."""
+    return (exhibit_from_index(index_html, "EX-99.1") or exhibit_from_index(index_html, "EX-99")
+            or exhibit_from_index(index_html, "EX-99", prefix=True))
 
 
 def html_text(raw: bytes | str) -> str:

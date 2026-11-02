@@ -8,9 +8,11 @@ data can show and bounds the rest with stated assumptions:
 Measured (from the snapshot alone):
 - coverage: the share of today's universe that was listed and in the price data at each past date (a late listing, a
   spin-off or a ticker that changed shows up as a gap);
-- late entrants: the return relative to the market of names whose first bar falls inside the window, from their first
-  bar on, against the names present throughout over the same sessions (today's large caps that listed late were, by
-  construction, the ones that grew: a measured part of the selection);
+- late entrants: what a name whose first bar falls inside the window grew to from its first bar on, against an equal-weight
+  basket of the names present throughout over the same sessions (today's large caps that listed late were, by construction,
+  the ones that grew: a measured part of the selection). The comparison is a ratio of growth, so it cannot fall below -100 %,
+  and it is stated in total over the entrant's own span: a span shorter than a year (`YEARLY`) is never annualised, because a
+  month's return raised to the twelfth power says nothing about a year;
 - equal weight of today's names minus the market (SPY) per year: survivorship plus the equal-weight (size) tilt, so an
   upper bound on the yearly flattering, not an estimate of it.
 
@@ -32,6 +34,8 @@ from .panel import Panel
 TURNOVER = (0.03, 0.05, 0.07)
 EXIT_GAPS = (0.0, -0.15, -0.30, -0.50)
 SESSIONS = 252
+YEARLY = 252  # the shortest span, in sessions, that may be stated per year
+MIN_SPAN = 21  # the shortest span compared at all
 
 
 def first_rows(panel: Panel) -> np.ndarray:
@@ -54,32 +58,57 @@ def coverage(panel: Panel, lo: int, hi: int) -> list[dict]:
     return out
 
 
-def _excess(panel: Panel, j: int, a: int, b: int) -> float:
-    c, m = panel.close[:, j], panel.market_close
-    if not (np.isfinite(c[a]) and np.isfinite(c[b])) or b - a < 21:
+def _growth(panel: Panel, j: int, a: int, b: int) -> float:
+    """What 1 held from the close of session a grew to by the close of session b, or NaN without both bars."""
+    c = panel.close[:, j]
+    if not (np.isfinite(c[a]) and np.isfinite(c[b])) or b - a < MIN_SPAN:
         return float("nan")
-    years = (b - a) / SESSIONS
-    return float((c[b] / c[a]) ** (1 / years) - (m[b] / m[a]) ** (1 / years))
+    return float(c[b] / c[a])
+
+
+def _median(x: list[float]) -> float:
+    return float(np.median(x)) if x else float("nan")
 
 
 def entrants(panel: Panel, lo: int, hi: int, skip: int = 21) -> dict:
-    """Late entrants (first bar inside the window) against names present throughout, over the same sessions: annualised
-    return minus the market's, from `skip` sessions after the entrant's first bar to the window's end."""
+    """Late entrants (first bar inside the window) against an equal-weight basket of the names present throughout, over the
+    same sessions: from `skip` sessions after the entrant's first bar to the window's end. Per entrant: `sessions`, the span;
+    `gap`, its growth over the basket's minus 1, in total over that span (above -1 by construction); `excess` and `peers`,
+    its growth and the basket's over the market's minus 1; and `per_year`, the gap annualised, only for a span of at least
+    `YEARLY` sessions. The summary is the median gap with the count used, and the same for the yearly figure."""
     first = first_rows(panel)
-    late = [j for j in range(len(panel.symbols)) if lo < first[j] <= hi - skip - 21]
+    late = [j for j in range(len(panel.symbols)) if lo < first[j] <= hi - skip - MIN_SPAN]
     stay = [j for j in range(len(panel.symbols)) if first[j] <= lo]
     rows = []
     for j in late:
         a = int(first[j]) + skip
-        own = _excess(panel, j, a, hi)
-        peers = np.array([_excess(panel, k, a, hi) for k in stay])
-        peer = float(np.nanmean(peers)) if np.isfinite(peers).any() else float("nan")
-        rows.append({"symbol": panel.symbols[j], "first": panel.dates[first[j]].isoformat(), "excess": own, "peers": peer,
-                     "gap": own - peer})
-    gaps = np.array([r["gap"] for r in rows], float)
-    gaps = gaps[np.isfinite(gaps)]
-    return {"late": len(late), "present": len(stay), "rows": rows, "mean_gap": float(gaps.mean()) if len(gaps) else float("nan"),
-            "se_gap": float(gaps.std(ddof=1) / np.sqrt(len(gaps))) if len(gaps) > 1 else float("nan")}
+        own = _growth(panel, j, a, hi)
+        peers = np.array([_growth(panel, k, a, hi) for k in stay])
+        basket = float(np.nanmean(peers)) if np.isfinite(peers).any() else float("nan")
+        market = float(panel.market_close[hi] / panel.market_close[a])
+        gap = own / basket - 1.0
+        rows.append({"symbol": panel.symbols[j], "first": panel.dates[first[j]].isoformat(), "sessions": hi - a,
+                     "excess": own / market - 1.0, "peers": basket / market - 1.0, "gap": gap,
+                     "per_year": (1.0 + gap) ** (SESSIONS / (hi - a)) - 1.0 if hi - a >= YEARLY and np.isfinite(gap) else float("nan")})
+    used = [r for r in rows if np.isfinite(r["gap"])]
+    yearly = [r["per_year"] for r in used if np.isfinite(r["per_year"])]
+    return {"late": len(late), "present": len(stay), "skip": skip, "rows": rows, "used": len(used), "median_gap": _median([r["gap"] for r in used]),
+            "median_sessions": _median([r["sessions"] for r in used]), "yearly_used": len(yearly), "median_per_year": _median(yearly)}
+
+
+def _entrants_line(ent: dict) -> str:
+    """The sentence of the note. Every figure in it is a ratio of growth, so none can fall below -100 %."""
+    if not ent["used"]:
+        return f"- Late entrants: {ent['late']} (too few to compare)."
+    line = (f"- Late entrants: {ent['late']} names listed inside the window, {ent['present']} present throughout. Over the same "
+            f"sessions as an equal-weight basket of the others (from {ent['skip']} sessions after each one's first bar to the "
+            f"window's end, a median of {ent['median_sessions']:.0f} sessions), "
+            f"the median entrant ended {ent['median_gap']:+.1%} against that basket, in total over its span and not per year "
+            f"({ent['used']} of {ent['late']} entrants compared).")
+    if ent["yearly_used"]:
+        return line + (f" Among the {ent['yearly_used']} with at least {YEARLY} sessions, the median is {ent['median_per_year']:+.1%} "
+                       "per year.")
+    return line + f" No entrant has {YEARLY} sessions, so no yearly figure is given."
 
 
 def ew_minus_market(panel: Panel, lo: int, hi: int) -> list[dict]:
@@ -120,9 +149,7 @@ def report(window: tuple[date, date], cov: list[dict], ent: dict, ew: list[dict]
         "## Measured", "",
         f"- Coverage of today's universe: {cov[0]['share']:.0%} at {cov[0]['date']}, {cov[-1]['share']:.0%} at {cov[-1]['date']}."
         if cov else "- Coverage: no sessions in the window.",
-        f"- Late entrants: {ent['late']} names listed inside the window, {ent['present']} present throughout; the late ones "
-        f"returned {ent['mean_gap']:+.1%} a year more than the others over the same sessions (relative to the market)."
-        if np.isfinite(ent["mean_gap"]) else f"- Late entrants: {ent['late']} (too few to compare).",
+        _entrants_line(ent),
         "- Equal weight of today's names minus the market, by year: "
         + ", ".join(f"{r['year']} {r['diff']:+.1%}" for r in ew) + " (survivorship plus the equal-weight tilt: an upper bound).",
         "", "## Bound from assumptions (not data)", "",

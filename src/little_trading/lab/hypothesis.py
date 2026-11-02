@@ -103,11 +103,30 @@ def real_scores(panel: Panel, make: Callable[[int], Predictor], start: date, end
 
 
 # --- the decision family -------------------------------------------------------------------------------------------------
+def exit_cost(panel: Panel, trades: list[dict], end: int, broker="avanza-mini", slippage: float = 0.0005) -> float:
+    """SEK lost if what `trades` left open were sold at the close of row `end`: courtage, currency fee and slippage. A
+    name with no close that session is valued at its last close."""
+    broker = decision.B.get(broker) if isinstance(broker, str) else broker
+    left: dict[str, int] = {}
+    for tr in trades:
+        left[tr["symbol"]] = left.get(tr["symbol"], 0) + (tr["qty"] if tr["side"] == "BUY" else -tr["qty"])
+    col = {s: i for i, s in enumerate(panel.symbols)}
+    fx, cost = float(panel.usdsek[end]), 0.0
+    for sym, q in left.items():
+        closes = panel.close[: end + 1, col[sym]]
+        seen = closes[np.isfinite(closes)]
+        if q > 0 and len(seen):
+            cost += q * seen[-1] * fx - broker.sell(q, seen[-1] * (1 - slippage), fx)["cash"]
+    return float(cost)
+
+
 def decision_trial(panel: Panel, sets: dict[str, np.ndarray], variants: dict[str, tuple], spans: dict, baseline: str = BASELINE_LAYER,
                    accounts=(10_000,), broker="avanza-mini", slippage: float = 0.0005, band: float = 0.03,
-                   on_cell=lambda cell: None, contexts: dict | None = None) -> list[dict]:
+                   on_cell=lambda cell: None, contexts: dict | None = None, charge_exit: bool = False) -> list[dict]:
     """One cell per (variant, score set, span, account). `variants` maps a name to `(layer, rebalance_every)` or to
-    `(layer, rebalance_every, band)`; the baseline must be one of them. Each cell keeps its daily returns for pairing."""
+    `(layer, rebalance_every, band)`; the baseline must be one of them. Each cell keeps its daily returns for pairing.
+    `charge_exit` takes the cost of selling what is left at the span's last close off the last day (`exit_cost`), so a
+    layer that holds on to its positions does not look cheaper than one that just paid for its trades."""
     if baseline not in variants:
         raise ValueError(f"the baseline {baseline!r} is not among the variants")
     rows = span_rows(panel, spans)
@@ -123,12 +142,18 @@ def decision_trial(panel: Panel, sets: dict[str, np.ndarray], variants: dict[str
                     vband = spec[2] if len(spec) > 2 else band
                     res = decision.backtest_weights(panel, layer, ctx, a, b, broker=broker, cash=float(account),
                                                     rebalance_every=every, slippage=slippage, band=vband)
-                    ret = float(res.equity[-1] / res.equity[0] - 1.0)
+                    eq, stats, cost = res.equity, res.stats, 0.0
+                    if charge_exit:
+                        cost = exit_cost(panel, res.trades, b, broker, slippage)
+                        eq = eq.copy()
+                        eq[-1] -= cost
+                        stats = summary(eq)
+                    ret = float(eq[-1] / eq[0] - 1.0)
                     cell = {"variant": vname, "scores": sname, "span": span, "account": float(account), "ret": ret,
-                            "ew_ret": ew_ret, "excess": ret - ew_ret, "sharpe": float(res.stats["sharpe"]),
-                            "max_drawdown": float(res.stats["max_drawdown"]), "fees": float(res.fees),
+                            "ew_ret": ew_ret, "excess": ret - ew_ret, "sharpe": float(stats["sharpe"]),
+                            "max_drawdown": float(stats["max_drawdown"]), "fees": float(res.fees), "exit_cost": cost,
                             "turnover": float(res.turnover), "trades": len(res.trades),
-                            "daily": res.equity[1:] / res.equity[:-1] - 1.0}
+                            "daily": eq[1:] / eq[:-1] - 1.0}
                     cells.append(cell)
                     on_cell(cell)
     return cells
@@ -323,6 +348,6 @@ def summary_line(verdicts: list[dict]) -> str:
     return f"{len(won)} of {len(judged)} judged variants pass T1" + (f": {', '.join(won)}" if won else "")
 
 
-__all__ = ["DEV_SPANS", "BASELINE_LAYER", "FeatureModel", "decision_trial", "decision_verdicts", "training_trial",
+__all__ = ["DEV_SPANS", "BASELINE_LAYER", "FeatureModel", "decision_trial", "decision_verdicts", "exit_cost", "training_trial",
            "score_sets", "real_scores", "rank_average", "store_decision", "store_training", "spans_for", "summary",
            "FEATURES"]

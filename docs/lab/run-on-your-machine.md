@@ -36,8 +36,20 @@ little-trading lab ledger seed
 little-trading lab service create shadow-eval --catalog
 ```
 
-It runs on weekdays 120 minutes after the US close. The first rows appear five sessions after the first stored score; no
-verdict before 60 matured sessions. Report: `~/.local/share/little-trading/lab/service/services/shadow-eval/report.md`.
+```bash
+little-trading lab service start shadow-eval
+```
+
+`service create` registers a service switched off, and a service that is off does not run on its schedule. `service start`
+switches it on and runs it once; from then on it runs on weekdays 120 minutes after the US close. The first rows appear five
+sessions after the first stored score; no verdict before 60 matured sessions. Report:
+`~/.local/share/little-trading/lab/service/services/shadow-eval/report.md`.
+
+A session where the scorers covered less than the config's `min_coverage` of the universe (default 80 %), or where too few of
+the scored names have a complete label, is flagged in the report and left out of the paired numbers and of the 60 sessions.
+Both snapshots so far held bars for under 80 % of the universe on their newest session (22.6 % and 69.7 %), so at present every
+forward session would be flagged and no verdict can build. The report says so when it happens; the ways out are the user's
+decision (`docs/plans/strategies.md`, section 9).
 
 ## 3. F foundation-model scorers (REQ-000000032): forward only, start early
 
@@ -51,8 +63,17 @@ little-trading lab service create h-f1-timesfm --catalog
 little-trading lab service create h-f1-chronos --catalog
 ```
 
+```bash
+little-trading lab service start h-f1-timesfm
+```
+
+```bash
+little-trading lab service start h-f1-chronos
+```
+
 Each builds its own pinned environment (torch and the model package) at creation and downloads its weights from Hugging
-Face on the first run. They score daily; `shadow-eval` already lists them as sources.
+Face on the first run. A scorer does not start on its schedule by creation alone: `service start` switches it on and runs it
+once, and from then on it scores daily. `shadow-eval` already lists them as sources.
 
 ## 4. X1 cross-check (REQ-000000028), before any idea is credited
 
@@ -64,7 +85,12 @@ little-trading lab service create x1-qlib-check --catalog
 little-trading lab service start x1-qlib-check
 ```
 
-Optional, only if `python3.12` is installed (Qlib has no wheel for newer Pythons):
+Optional, it needs `python3.12` (Qlib has no wheel for newer Pythons). Without it, install it with uv (`uv python find 3.12`
+then prints where it is; the lab finds it by the name `python3.12` on its `PATH`):
+
+```bash
+uv python install 3.12
+```
 
 ```bash
 little-trading lab service create x1-qlib-native --catalog

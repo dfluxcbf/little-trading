@@ -6,6 +6,10 @@ database. Models are refitted on rows whose labels were known before the scored 
 folds: `train_end = t - 1 - horizon`), so a score never uses a later price. A session that was already scored is skipped,
 and a session the lab missed is a gap, never back-filled.
 
+Every model scores the same names: `forward_log.scorable`, which needs a real bar on the scored session, so a name the live
+database has no bar for that day is left out rather than scored at a forward-filled price. `shadow_coverage` records how many
+names that left (names scored, names with a bar, universe), which `shadow-eval` states and flags.
+
 Models: `noise` (seeded), `momentum` (20-session return), `trees` (gradient-boosted trees on the 18 ranked features, with
 the parameters Stage 1 selected).
 """
@@ -15,6 +19,7 @@ import time
 
 import numpy as np
 
+from little_trading.lab import forward_log
 from little_trading.lab.panel import Panel
 from little_trading.lab.service.context import Skip
 
@@ -53,6 +58,8 @@ def run(ctx) -> None:
     if not todo:
         raise Skip(f"{asof} is already scored")
     ordinal = panel.dates[last].toordinal()
+    names = forward_log.scorable(panel, last)
+    cover = {}
     scored = 0
     for name in todo:
         t0 = time.time()
@@ -62,15 +69,17 @@ def run(ctx) -> None:
             pred.fit(panel, last - 1 - horizon)  # rows whose 5-session labels ended before today
             fitted = int(getattr(pred, "m", None) is not None)
         scores = np.asarray(pred.predict(panel, np.array([last])), dtype=float)[0]
-        ok = np.where(np.isfinite(scores))[0]
+        ok = np.where(names & np.isfinite(scores))[0]
         order = ok[np.argsort(-scores[ok], kind="stable")]
         rank = {int(i): r + 1 for r, i in enumerate(order)}
         rows = [(asof, name, panel.symbols[i], float(scores[i]), rank[int(i)], ctx.snapshot_dir.name) for i in ok]
         db.executemany("INSERT OR REPLACE INTO shadow_scores VALUES (?,?,?,?,?,?)", rows)
         db.execute("INSERT OR REPLACE INTO shadow_runs VALUES (?,?,?,?,?,?,?)",
                    (asof, name, len(rows), fitted, round(time.time() - t0, 2), ctx.snapshot_dir.name, ctx.run_id))
+        cover = forward_log.record_coverage(db, asof, name, len(rows), panel, last, ctx.snapshot_dir.name, ctx.run_id)
         db.commit()
-        ctx.log(f"{asof} {name}: {len(rows)} scores in {time.time() - t0:.1f}s")
+        ctx.log(f"{asof} {name}: {len(rows)} scores of {cover['universe']} names ({cover['bars']} with a bar) in "
+                f"{time.time() - t0:.1f}s")
         scored += 1
-    ctx.result(metrics={"asof": asof, "models": todo, "symbols": len(panel.symbols)},
+    ctx.result(metrics={"asof": asof, "models": todo, "symbols": len(panel.symbols), "names": cover["names"], "bars": cover["bars"]},
                message=f"scored {asof} with {', '.join(todo)}", data_hash=manifest.get("hash"))

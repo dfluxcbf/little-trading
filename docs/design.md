@@ -23,6 +23,8 @@ places real orders and holds no brokerage credentials.
   below.
 - Cost every fill as a real Swedish account would, in SEK at Avanza or Nordnet, with the tax of an aktie- och
   fonddepå (REQ-000000021): see Broker costs below.
+- Hold the market index by default and keep measuring the models without acting on them (REQ-000000035): see
+  Strategy under Dry-run server.
 
 ## Non-goals
 
@@ -100,17 +102,35 @@ as results:
 `serve --dry-run` acts as the real software would, with fake money. It never places an order. `--dry-run` is
 required: without it `serve` refuses, because real trading is not implemented yet (REQ-000000016).
 
+- **Strategy** (`--strategy`, REQ-000000035). The standard, `index`, holds SPY: while the market is open it buys
+  whole shares at today's market bar's close plus slippage with the cash that covers them and their costs (on
+  10,000 SEK one share, about a quarter stays cash), and adds a share when the cash covers another. With no bar of
+  today it buys nothing and a later round retries, because SPY is never sold and a wrong entry would stay. SPY is sold
+  by no stop loss, maximum hold or score. Anything else still held is sold at its price of the round; with no price of
+  today it stays until a round has one. The models keep training and deciding on the watchlist, and every decision is
+  stored and not acted on, with the outcome `not_acted`, or `held`, `bought` or `sold` for a position the index
+  strategy itself kept or moved. SPY is decided every round, so the web app has its price from the round it is bought;
+  its rows stay out of the live evaluation, since its votes are not stock predictions. Held SPY is watched like any
+  held stock, once per refresh; it stays out of the training set, the candidates and the news collection, so the lab's
+  data does not change, unless SPY is named as a fixed company, which trains and collects news as any other. The
+  benchmark is still fractions of SPY from the first round, so the gap to it is the idle cash, the fees and the
+  entry. Both are price return: dividends are not modelled (see Broker costs), which under a hold with no end date
+  understates equity every year by the held share's dividends and the benchmark by those of its larger holding (on
+  10,000 SEK about 1.3 shares against one), so the gap to the benchmark also looks smaller than it is. `--strategy models`
+  is the off switch: it trades as the rest of this section describes, and a SPY position left from `index` then follows
+  the same rules. Decision, Acting on a decision and Trading below say what the models do, and they act on money only
+  under `models`. The strategy is shown in the web app, the report and each server start.
 - **Stopping and starting again** (REQ-000000016). The server can be stopped at any time (Ctrl+C) and started
   again later; it continues with the same portfolio, rounds, news, models and selection. At every start it first
   catches up, and nothing trades, fetches news on schedule or runs daily jobs until that has succeeded: daily
   prices for every session missed while stopped, training with the running code, the dynamic selection, the
   Google News history missed (up to today), the latest headlines, retraining with them, the daily jobs of the
   sessions that closed while it was stopped (run once, for the latest: evaluation, lessons, report), and a look
-  at each open position at today's price, noting those past the stop loss or max hold. If SPY or a held stock
+  at each open position at today's price, noting those the first round will sell. If SPY or a held stock
   has no fresh price, or news history fails for more than a quarter of the companies, the catch-up fails and
   is retried every five minutes. Missed rounds are not replayed: a real trader could not have acted while
-  stopped, so a stop loss crossed meanwhile is acted on in the first round after the catch-up, at the price
-  of then. Rounds keep their 15-minute spacing across a restart. Each downtime (when, how long, complete
+  stopped, so under `--strategy models` a stop loss crossed meanwhile is acted on in the first round after the
+  catch-up, at the price of then. Rounds keep their 15-minute spacing across a restart. Each downtime (when, how long, complete
   sessions missed, whether the stop was clean) is kept and shown in the web app and the report. The first
   start of a new data directory takes about 15-20 minutes, mostly news history.
 - **Starting fresh** (`--start-fresh`, REQ-000000018). When the software changed or its past decisions no
@@ -145,13 +165,13 @@ required: without it `serve` refuses, because real trading is not implemented ye
   period, so carrying weights over cannot leak validation data into the skill. Restarts and `--start-fresh`
   keep all of this; a fresh start resets the portfolio and its decisions, not what was learned.
 - **Decision** (`engine.py`, REQ-000000017): `conviction * skill-weighted model votes`. Only models with
-  measured skill vote, so with none the score is 0 and the trader waits; the first version mixed in the
+  measured skill vote, so with none the score is 0 and, under `--strategy models`, the trader waits; the first version mixed in the
   unmeasured technical score at 40% or more, which on its first round signalled BUY for 39 of 50 companies and
   spent all the cash at once. A vote is the model's probability against its training base rate in units of 10
   points, clipped to [-1, 1], so a model that only echoes "the market usually rises" does not count as bullish.
   News models vote only with headlines from the last 72 hours, weighted by recency (24-hour half-life).
-- **Acting on a decision** (REQ-000000017). A BUY (score at least +0.15) or a SELL by score (at most -0.15)
-  must repeat in 3 consecutive rounds, each within 45 minutes of the next, before it is acted on; until then
+- **Acting on a decision** (REQ-000000017, `--strategy models` only). A BUY (score at least +0.15) or a SELL by
+  score (at most -0.15) must repeat in 3 consecutive rounds, each within 45 minutes of the next, before it is acted on; until then
   the decision is stored as `waiting` ("BUY signal 2/3 rounds, confirming"). At most 1 buy per round and 2 per
   day, so cash goes in gradually; a stock sold is not bought back for 2 sessions. The risk exits, stop loss and
   max hold, act at once. Every decision stores why it was taken, waiting included.
@@ -167,7 +187,8 @@ required: without it `serve` refuses, because real trading is not implemented ye
   190, minus restricted ones), each with ten years of prices (every third session) and four months of news
   deepened in the background; at most 12,000 price samples per logistic fit, thinned evenly.
 - **Trading.** Rounds every 15 minutes while the US regular session is open (Yahoo's trading period, so
-  holidays are skipped). Sells first (stop loss, max hold in sessions, confirmed SELL score), then confirmed BUY
+  holidays are skipped). Under `--strategy models`: sells first (stop loss, max hold in sessions, confirmed SELL
+  score), then confirmed BUY
   candidates best score first, within the pacing, each up to 20% of equity, at most 6 positions, the broker's
   costs (see Broker costs) and 0.05% slippage per fill. The
   benchmark is SPY bought with the starting amount at the first round and held: with a changing list, the
@@ -200,7 +221,9 @@ REQ-000000021). `--broker` picks a courtage class; the default is `avanza-mini`.
   too.
 - **Currency conversion**: the SEK is converted to USD on a buy and back on a sell at that day's USD/SEK rate
   (Yahoo `SEK=X`), and each conversion pays 0.25% on top. Equity, cash, fees and gains are SEK; prices per
-  share, the stop loss and the gain per share stay in USD.
+  share, the stop loss and the gain per share stay in USD. The web app's positions show both results: the USD change
+  per share, and the account's gain against the SEK the position cost, fees and exchange rate included, before
+  selling costs.
 - **Whole shares**: neither broker documents fractional US shares, so a buy is whole shares. With a small
   account the 20% position budget can be less than one share with its costs: the buy is refused and the
   decision says what one share would cost.

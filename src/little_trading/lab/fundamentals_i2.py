@@ -51,12 +51,12 @@ def _ord(s) -> int | None:
         return None
 
 
-def parse_facts(companyfacts: dict) -> dict[str, list[tuple]]:
+def parse_facts(companyfacts: dict, fields: dict | None = None) -> dict[str, list[tuple]]:
     """field -> [(end, start or None, value, filed)] as ordinals, from one companyfacts document. Flows keep annual
-    periods only. For the same period and filing date, the preferred concept wins."""
+    periods only. For the same period and filing date, the preferred concept wins. `fields` replaces FIELDS."""
     facts = companyfacts.get("facts") or {}
     out: dict[str, list[tuple]] = {}
-    for field, (tax, concepts, unit, flow) in FIELDS.items():
+    for field, (tax, concepts, unit, flow) in (fields or FIELDS).items():
         seen: dict[tuple, tuple] = {}
         for rank, concept in enumerate(concepts):
             for f in ((facts.get(tax) or {}).get(concept) or {}).get("units", {}).get(unit, []):

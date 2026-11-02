@@ -126,3 +126,18 @@ a planted look-ahead on one side is reported as a significant gap; a flat side i
 rows with a purged validation tail; the service writes both tables for both labels.
 Not shown: anything about real prices, or Qlib's own numbers (they come from Chinese A-shares with 1-day labels and are not
 a target here).
+
+## Results on real data (2026-11-01 and 2026-11-02)
+
+Written from `x1_summary`, development 2019-2023, 1,258 sessions. Pass: score correlation at least 0.6 and |t| below 2.
+
+| Service | Settings | Label | Ran as | Score correlation | IC ours | IC Qlib | Gap t | Passes |
+|---|---|---|---|---|---|---|---|---|
+| `x1-same-params` | same on both sides | rank5 | qlib 0.9.7 LGBModel | 0.79 | +0.0026 | +0.0056 | +0.84 | yes |
+| `x1-same-params` | same on both sides | Qlib's z-score | qlib 0.9.7 LGBModel | 0.76 | -0.0025 | -0.0039 | -0.35 | yes |
+| `x1-qlib-native` | Qlib's published | rank5 | qlib 0.9.7 LGBModel | 0.00 | +0.0026 | 0.0000 | -0.32 | no, Qlib flat on all sessions |
+| `x1-qlib-native` | Qlib's published | Qlib's z-score | qlib 0.9.7 LGBModel | 0.13 | -0.0025 | +0.0017 | +0.46 | no |
+
+`x1-qlib-check`, the LightGBM fallback, gave the same figures as `x1-qlib-native`. The tree harness agrees with a second
+implementation under equal settings. Qlib's published settings do not suit our label scale and row count, most likely because
+L1 206 and L2 581 remove the splits, though that cause was not tested on its own.

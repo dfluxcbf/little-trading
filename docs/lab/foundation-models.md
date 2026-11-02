@@ -18,8 +18,10 @@ Each run scores **the newest session of the snapshot only**: the score of a comp
 sessions ahead over the last close, minus 1, from bars up to that session (`foundation.score_session` cuts the arrays
 before the model sees them). The scores go to `shadow_scores (asof, model, symbol, score, rank, snapshot)` in the service's
 own `service.db`, exactly like `shadow-champion`, with the model names `kronos`, `timesfm` and `chronos`. A session already
-scored is skipped; a session the lab missed (machine off, run failed) is a gap and is never back-filled. Every run also
-writes `foundation_runs` (names, wall seconds, CPU seconds, milliseconds per name, model version or Kronos commit).
+scored is skipped; a session the lab missed (machine off, run failed) is a gap and is never back-filled. A name with no real
+bar on the scored session gets no score; the names are the same as the champion's, narrowed only by the history the model
+needs. Every run also writes `foundation_runs` (names, wall seconds, CPU seconds, milliseconds per name, model version or
+Kronos commit) and `shadow_coverage` (names scored, names with a bar, universe).
 
 ## The forward-only rule
 
@@ -76,6 +78,9 @@ The lab installs these when the service is created and freezes the result into `
 (sympy, filelock, and on Linux the CUDA libraries that the PyPI torch wheel depends on, several GB) are not pinned here but
 are recorded there. Model weights are fetched from Hugging Face on the first run (the declared host) into its cache.
 
+These three environments build on the lab's own Python and need no other interpreter. If a pinned environment ever does
+(`x1-qlib-native` needs 3.12), `uv python install 3.12` installs Python 3.12.
+
 ## CPU budget
 
 Each service runs with 2 threads (the lab's cap is 8), memory 2048 MB (Kronos, Chronos) and 3072 MB (TimesFM), a timeout
@@ -116,14 +121,29 @@ little-trading lab service create h-f1-timesfm --catalog
 little-trading lab service create h-f1-chronos --catalog
 ```
 
-Each one starts on its own schedule (weekdays 150, 160 and 170 minutes after the US close); `little-trading lab service
-start <id>` runs one at once.
+Creating a service registers it switched off, so a scorer does not start on its schedule by creation alone. Start each one:
+
+```bash
+little-trading lab service start h-f1-kronos
+```
+
+```bash
+little-trading lab service start h-f1-timesfm
+```
+
+```bash
+little-trading lab service start h-f1-chronos
+```
+
+`service start` switches the service on and runs it once; from then on it runs on its schedule (weekdays 150, 160 and 170
+minutes after the US close).
 
 3. Nothing to register: the catalog entry of `shadow-eval` already lists `h-f1-kronos`, `h-f1-timesfm` and `h-f1-chronos`
 among its sources (a source with no scores yet is skipped), so their scores are evaluated once their labels mature. A
 `shadow-eval` created before this version lists only `shadow-champion`; recreate it from the catalog
-(`little-trading lab service delete shadow-eval`, then `little-trading lab service create shadow-eval --catalog`;
-deleting archives its directory, and the evaluated rows are rebuilt on the next run because matured prices do not change).
+(`little-trading lab service delete shadow-eval`, `little-trading lab service create shadow-eval --catalog`, then
+`little-trading lab service start shadow-eval`; deleting archives its directory, and the evaluated rows are rebuilt on the next
+run because matured prices do not change).
 
 4. Follow them with `little-trading lab service runs h-f1-kronos`, `little-trading lab service logs h-f1-kronos` and the
 report at `~/.local/share/little-trading/lab/service/services/shadow-eval/report.md`.

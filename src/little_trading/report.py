@@ -17,6 +17,15 @@ def _share(x) -> str:
     return "n/a" if x is None else f"{x:.0%}"
 
 
+def strategy_of(store: Store, status: dict | None = None) -> str:
+    """The running server's strategy, or the one of its latest start; starts from before there was a choice traded
+    on the models."""
+    if status and status.get("strategy"):
+        return status["strategy"]
+    boots = store.query("SELECT config FROM boots ORDER BY id DESC LIMIT 1")
+    return json.loads(boots[0]["config"]).get("trader", {}).get("strategy", "models") if boots else "models"
+
+
 def build(store: Store, horizon: int, days: int = 7, status: dict | None = None) -> str:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     pf = store.get_meta("portfolio") or {}
@@ -30,6 +39,13 @@ def build(store: Store, horizon: int, days: int = 7, status: dict | None = None)
               "Feed it to Claude together with the code (`src/little_trading/`) to find what to improve: the "
               "decision weights, the models, the features, the exits, the news handling. Every number below comes "
               "from the server's database; the raw per-event log is in `logs/<date>.jsonl` beside it.", ""]
+
+    lines += ["## Strategy", "",
+              "index: the trader holds SPY in whole shares with the cash that covers them and their costs, and sells "
+              "anything else. Every model's decision below is recorded and not acted on. Equity and the benchmark are price "
+              "return: dividends are not credited."
+              if strategy_of(store, status) == "index" else
+              "models: the trader acts on the skill-weighted models' confirmed signals.", ""]
 
     boots = store.query("SELECT * FROM boots ORDER BY id DESC LIMIT 5")
     lines += ["## Software", ""]
@@ -59,7 +75,7 @@ def build(store: Store, horizon: int, days: int = 7, status: dict | None = None)
         lines += [f"| | value |", "|---|---|",
                   f"| starting | {start:,.2f} |", f"| equity | {last['equity']:,.2f} ({_pct(last['equity'] / start - 1)}) |",
                   f"| cash | {last['cash']:,.2f} |", f"| invested | {last['invested']:,.2f} |",
-                  f"| equal-weight buy and hold | {bench:,.2f} ({_pct(bench / start - 1) if bench else 'n/a'}) |"
+                  f"| SPY bought and held | {bench:,.2f} ({_pct(bench / start - 1) if bench else 'n/a'}) |"
                   if bench else "| buy and hold | n/a |",
                   f"| positions | {', '.join(f'{s} x{q}' for s, q in json.loads(last['positions']).items()) or 'none'} |",
                   f"| rounds | {store.get_meta('rounds', 0)} since {pf.get('started', '?')} |", ""]

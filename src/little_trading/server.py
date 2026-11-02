@@ -18,7 +18,9 @@ Loops, each in its own thread, each logging to the store and never dying on an e
 Missed rounds are never replayed: a real trader could not have acted while stopped, so the dry run does not
 either. A stop (Ctrl+C, SIGTERM) lets the running step finish or abandon its fetches before anything is written.
 
-Watched companies are the fixed list, the dynamic picks (`universe.py`) and anything still held.
+Watched companies are the fixed list, the dynamic picks (`universe.py`) and anything still held. Under the index
+strategy (`engine.py`) that includes SPY, which stays the market: it is fetched once per refresh, and neither its
+headlines nor its bars become training data or candidates, unless it is named as a fixed company.
 
 The web app (`web.py`) reads the same store.
 """
@@ -35,7 +37,7 @@ from typing import Callable
 from . import __version__, evaluation, report, restricted
 from .data import Fetcher, chart_name, http_fetch, parse_yahoo_chart
 from .broker import SEK_PER_USD
-from .engine import Trader, TraderConfig, business_days
+from .engine import INDEX, Trader, TraderConfig, business_days
 from .horizons import spec_for
 from .models import Bar
 from .newsfeed import NewsCollector
@@ -67,6 +69,7 @@ class ServerConfig:
     news_history_interval: int = 1800  # seconds between background passes until the history is complete
     dynamic_news_days: int = 30
     request_pause: float = 1.5  # seconds between requests to one provider
+    refresh_universe: bool = True  # the daily job stores the finished session for every stored company, not only the watched
     trader: TraderConfig = field(default_factory=TraderConfig)
     catch_up_retry: int = 300  # seconds before a failed catch-up is tried again
 
@@ -185,6 +188,11 @@ class Server:
                 self.store.set_meta("names", names)
         return parse_yahoo_chart(payload), payload
 
+    def news_symbols(self) -> list[str]:
+        """The watched companies: the market held by the index strategy has no headlines to collect, so the news table
+        and the lab's snapshot of it stay what they were."""
+        return [s for s in self.watched() if s != MARKET or s in self.config.symbols]
+
     def rates(self) -> list[str]:
         """The exchange rates the portfolio needs: USD/SEK for a SEK account, none for the USD one."""
         return [SEK_PER_USD] if self.trader.broker.currency == "SEK" else []
@@ -202,7 +210,7 @@ class Server:
         """
         today = self.clock().astimezone(ET).date()
         out = {}
-        for sym in symbols:
+        for sym in dict.fromkeys(symbols):  # the market is also watched while it is held
             if self.stop.is_set():
                 break
             last = self.store.last_day(sym)
@@ -241,7 +249,8 @@ class Server:
                 if name == "prices":
                     held = list(self.trader.portfolio["positions"])
                     got = self.refresh_prices([MARKET, *self.rates(), *self.watched()])
-                    if missing := [s for s in [MARKET, *self.rates(), *held] if s not in got and not self.stop.is_set()]:
+                    needed = dict.fromkeys([MARKET, *self.rates(), *held])
+                    if missing := [s for s in needed if s not in got and not self.stop.is_set()]:
                         raise CatchUpError(f"no fresh prices for {' '.join(missing)}")
                     self.store.log("catch-up", f"prices up to date for {len(got)} symbols", symbols=sorted(got))
                 elif name == "news history":
@@ -296,8 +305,11 @@ class Server:
             price = prices[sym][-1].close if prices.get(sym) else None
             change = price / p["avg_price"] - 1.0 if price else None
             held = business_days(date.fromisoformat(p["opened_day"]), self.clock().date()) if "opened_day" in p else None
-            note = ("past the stop loss" if change is not None and change <= -self.spec.stop_loss else
-                    "past the max hold" if held is not None and held >= self.spec.max_hold else "")
+            if self.config.trader.strategy == INDEX:
+                note = "" if sym == MARKET else f"not {MARKET}"  # the index is held whatever it did
+            else:
+                note = ("past the stop loss" if change is not None and change <= -self.spec.stop_loss else
+                        "past the max hold" if held is not None and held >= self.spec.max_hold else "")
             out.append({"symbol": sym, "qty": p["qty"], "avg_price": round(p["avg_price"], 4), "price": price,
                         "change": round(change, 4) if change is not None else None, "held_sessions": held,
                         "note": note})
@@ -328,7 +340,7 @@ class Server:
         names = self.store.get_meta("names", {})
         today = self.clock().date()
         added, failed = 0, []
-        for sym in self.watched():
+        for sym in self.news_symbols():
             if self.stop.is_set():
                 break
             days = self.config.news_backfill_days if sym in self.config.symbols else self.config.dynamic_news_days
@@ -413,19 +425,22 @@ class Server:
             out.append(sym)
         return out, dropped
 
-    def select(self) -> U.Selection | None:
-        """Ranks the candidates by the decision score (then dollar volume) and picks the dynamic companies."""
+    def select(self, keep_today: bool = False) -> U.Selection | None:
+        """Ranks the candidates by the decision score (then dollar volume) and picks the dynamic companies. After the
+        close (`keep_today`) a new candidate's bars include the finished session, and one already stored is not fetched again."""
         if not self.config.dynamic:
             return None
         cands, dropped = self.candidates()
         market = self.store.bars(MARKET)
         now = self.clock()
+        today = now.astimezone(ET).date()
         scored = []
         for sym in cands:
             if self.stop.is_set():
                 return None  # an incomplete ranking is not saved; the next start ranks again
             try:
-                self.refresh_prices([sym], quiet=True)
+                if not (keep_today and self.store.last_day(sym) == today):
+                    self.refresh_prices([sym], keep_today=keep_today, quiet=True)
             except restricted.RestrictedSymbolError as exc:  # caught by the name Yahoo reports
                 dropped.append(f"{sym}: {exc}")
                 continue
@@ -468,7 +483,7 @@ class Server:
     def news_round(self) -> str:
         names = self.store.get_meta("names", {})
         added, per = 0, {}
-        for sym in self.watched():
+        for sym in self.news_symbols():
             if self.stop.is_set():
                 break
             try:
@@ -500,6 +515,9 @@ class Server:
         for sym in self.watched():
             if self.stop.is_set():
                 return "stopped before deciding"
+            if sym == MARKET:  # market_open just fetched it
+                history[sym] = merge(self.store.bars(sym), mkt_recent)
+                continue
             try:
                 recent, _ = self.chart(sym, "5d")
             except restricted.RestrictedSymbolError:
@@ -522,6 +540,7 @@ class Server:
         stored = [r["symbol"] for r in self.store.query("SELECT DISTINCT symbol FROM prices ORDER BY symbol")
                   if "=" not in r["symbol"] and r["symbol"] != MARKET]  # not the market or an exchange rate
         known = list(dict.fromkeys([*(self.store.get_meta("known_symbols") or []), *self.watched(), *stored]))
+        known = [s for s in known if s != MARKET or s in self.config.symbols]  # held, it is the market: it cannot beat itself
         self.store.set_meta("known_symbols", known)
         return [s for s in known if not self.restrictions.reason(s)]
 
@@ -545,12 +564,32 @@ class Server:
         if self.store.get_meta("daily_done") == today:
             return None
         self.refresh_prices([MARKET, *self.rates(), *self.watched()], keep_today=True)
+        self.refresh_universe()
         self.retrain()
-        self.select()
+        self.select(keep_today=True)
         self.backfill_news()  # history for new dynamic picks
         self.mark_equity({s: bars[-1].close for s in self.trader.portfolio["positions"] if (bars := self.store.bars(s))}
                          | {s: self.store.bars(s)[-1].close for s in [MARKET, *self.rates()]})
         return self.daily_work(today)
+
+    def refresh_universe(self) -> None:
+        """Stores the finished session for every stored company beyond the watched ones, so the lab's snapshot of this
+        evening has the session's bars (REQ-000000034). A company that fails is logged and left out: this data never
+        decides a trade, so it must not stop the daily job, and the next day's refresh fills the gap."""
+        if not self.config.refresh_universe:
+            return
+        watched = set(self.watched())
+        symbols = [s for s in self.training_symbols() if s not in watched]
+        fresh = 0
+        for sym in symbols:
+            if self.stop.is_set():
+                break
+            try:
+                fresh += bool(self.refresh_prices([sym], keep_today=True, quiet=True))
+            except restricted.RestrictedSymbolError:  # caught by the name Yahoo reports: nothing was stored
+                continue
+        self.store.log("daily", f"stored the session's bars for {fresh} of {len(symbols)} companies beyond the watched ones",
+                       fresh=fresh, companies=len(symbols))
 
     def missed_daily(self) -> str | None:
         """The daily jobs of sessions that closed while the server was stopped, run once for the latest of them
@@ -587,7 +626,8 @@ class Server:
         return {"software": __version__, "started": self.started, "data_dir": self.store.directory,
                 "symbols": self.watched(), "fixed": self.config.symbols,
                 "dynamic": [d["symbol"] for d in self.selection.dynamic] if self.selection else [],
-                "horizon": self.config.horizon, "mode": "dry-run", "phase": self.phase,
+                "horizon": self.config.horizon, "mode": "dry-run", "strategy": self.config.trader.strategy,
+                "phase": self.phase,
                 "market": self.store.get_meta("market"), "ready": self.ready.is_set(),
                 "previous_run": self.previous, "downtimes": (self.store.get_meta("downtimes") or [])[-10:],
                 "fresh_starts": (self.store.get_meta("fresh_starts") or [])[-10:],
@@ -600,7 +640,8 @@ class Server:
         self.store.set_meta("running", self.started)
         self.heartbeat()
         last = self.previous["last_seen"]
-        self.store.log("server", f"little-trading {__version__} dry-run server starting"
+        self.store.log("server", f"little-trading {__version__} dry-run server starting, strategy "
+                                 f"{self.config.trader.strategy}"
                                  + (f"; last alive {last}, {'clean' if self.previous['clean_stop'] else 'no clean'} stop"
                                     if last else "; first start"), config=cfg, previous=self.previous)
         for loop in self.loops:

@@ -67,9 +67,14 @@ def parse_acceptance(stamp: str, tz: str = "America/New_York") -> datetime:
 
 
 def earnings_filings(submissions: dict, tz: str = "America/New_York") -> list[dict]:
+    """The earnings filings of `filings.recent` (see `item_202`)."""
+    return item_202(recent_filings(submissions), tz)
+
+
+def item_202(filings: list[dict], tz: str = "America/New_York") -> list[dict]:
     """The 8-K filings with item 2.02, oldest first: accession, acceptance (aware), filing date, primary document."""
     out = []
-    for f in recent_filings(submissions):
+    for f in filings:
         items = {i.strip() for i in str(f.get("items") or "").split(",")}
         if f.get("form") != "8-K" or "2.02" not in items or not f.get("acceptanceDateTime"):
             continue

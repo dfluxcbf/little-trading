@@ -62,6 +62,7 @@ svg text { fill: var(--muted); font-size: 11px; }
   <h1>little-trading · dry run</h1>
   <span class="pill" id="p-version">…</span>
   <span class="pill" id="p-market">market …</span>
+  <span class="pill" id="p-strategy">…</span>
   <span class="pill" id="p-round">…</span>
   <span class="pill" id="p-models">…</span>
   <span class="pill" id="p-errors">…</span>
@@ -111,6 +112,7 @@ function line(series, opts = {}) {
   const legend = series.length > 1 ? '<div class="legend">' + series.map((s, i) => `<span style="color:${s.color || COLORS[i % COLORS.length]}">● ${esc(s.name)}</span>`).join("") + "</div>" : "";
   return legend + svg;
 }
+const NOT_ACTED = "<b>The index strategy holds SPY: these decisions are recorded and not acted on.</b> ";
 const scoreBar = s => `<span class="bar" style="width:${Math.min(60, Math.abs(s) * 60)}px;background:var(${s >= 0 ? "--up" : "--down"})"></span> <span class="${cls(s)}">${s >= 0 ? "+" : ""}${Number(s).toFixed(3)}</span>`;
 
 async function header() {
@@ -120,6 +122,7 @@ async function header() {
     const m = document.getElementById("p-market");
     m.textContent = !s.ready ? (s.phase || "catching up…") : s.market && s.market.open ? "market open" : "market closed";
     m.className = "pill " + (!s.ready ? "warn" : s.market && s.market.open ? "ok" : "");
+    document.getElementById("p-strategy").textContent = s.strategy === "index" ? "strategy: hold SPY" : "strategy: models";
     document.getElementById("p-round").textContent = `round ${s.portfolio.rounds || 0} · ${s.counts.news} headlines`;
     document.getElementById("p-models").textContent = s.models_trained_at ? "models " + when(s.models_trained_at) : "models not trained";
     const errs = s.loops.filter(l => l.last_error).length;
@@ -138,9 +141,10 @@ const views = {
     const year = new Date().getUTCFullYear(), tax = (st.tax_by_year || {})[year];
     const brokers = Object.entries(st.fees_at_each_broker || {});
     return `<div class="grid">${kpi(`Equity (${esc(cur)})`, money(last.equity))}${kpi("Total growth", pct(growth), cls(growth))}
-      ${kpi("SPY held", pct(bench), cls(bench))}${kpi("vs SPY", growth == null || bench == null ? "–" : pct(growth - bench), cls(growth - bench))}
+      ${kpi("SPY benchmark", pct(bench), cls(bench))}${kpi("vs SPY", growth == null || bench == null ? "–" : pct(growth - bench), cls(growth - bench))}
       ${kpi("Cash", money(last.cash))}${kpi("Holding value", money(last.invested))}${kpi("Starting", money(start))}${kpi("Rounds", s.portfolio.rounds || 0)}
       ${kpi("Fees paid", money(st.fees))}${cur === "SEK" ? kpi(`Tax ${year} (est.)`, money(tax ? tax.tax : 0)) : ""}</div>
+      ${s.strategy === "index" ? `<div class="card"><h2>Strategy: hold SPY</h2><p class="muted">The trader holds SPY in whole shares with the cash that covers them and their costs, without stop loss or maximum hold, and sells anything else. The cash left is what does not buy another share. The models keep deciding and training, and are not acted on. The SPY benchmark tile and the SPY line below are the starting amount in fractions of a share since the first round, not the shares held. Equity and the benchmark are price return: dividends are not credited, so both understate SPY, and the benchmark, holding more of it, by more. <code>--strategy models</code> trades on the models instead.</p></div>` : ""}
       <div class="card"><h2>Costs at ${esc(s.portfolio.broker)}</h2><p class="muted">Amounts in ${esc(cur)}${s.portfolio.usdsek ? `; USD/SEK ${Number(s.portfolio.usdsek).toFixed(4)} at the last round` : ""}. Prices per share are in USD.
       ${cur === "SEK" ? `Courtage ${money(st.courtage)}, currency conversion ${money(st.fx_fees)}. Tax is 30% of each year's net realised gain (aktie- och fonddepå), paid with the next year's tax return, not taken from the cash.` : "The USD account: a flat 0.1% fee, no conversion."}</p>
       ${brokers.length && st.fees ? `<table><tr><th>The same fills at</th><th>Fees (SEK)</th></tr>${brokers.map(([b, f]) => `<tr><td>${esc(b)}</td><td>${money(f)}</td></tr>`).join("")}</table>` : ""}
@@ -148,8 +152,8 @@ const views = {
       <div class="card"><h2>Equity vs SPY bought and held</h2><p class="muted">A point per trading round (every 15 minutes while the US market is open), after each catch-up and after the close. ${eq.length} points, the latest ${when(eq.length ? eq[eq.length - 1].ts : null)}${s.market && s.market.open ? "" : ": the market is closed, so it moves again at the next open"}.</p>${line([
         {name: "dry-run equity", points: eq.map(r => [Date.parse(r.ts), r.equity])},
         {name: "SPY bought and held", dash: true, points: eq.filter(r => r.benchmark).map(r => [Date.parse(r.ts), r.benchmark])}], {fmt: money})}</div>
-      <div class="two"><div class="card"><h2>Positions</h2><table><tr><th>Symbol</th><th>Qty</th><th>Entry (USD)</th><th>Price (USD)</th><th>Value (${esc(cur)})</th><th>P/L</th><th>Opened</th></tr>
-      ${pos.map(p => `<tr><td>${esc(p.symbol)}</td><td>${p.qty}</td><td>${money(p.avg_price)}</td><td>${money(p.price)}</td><td>${money(p.value)}</td><td class="${cls(p.unrealised)}">${pct(p.unrealised)}</td><td>${esc(p.opened_day)}</td></tr>`).join("") || '<tr><td colspan="7" class="muted">No open positions.</td></tr>'}</table></div>
+      <div class="two"><div class="card"><h2>Positions</h2><table><tr><th>Symbol</th><th>Qty</th><th>Entry (USD)</th><th>Price (USD)</th><th>Value (${esc(cur)})</th><th>P/L per share (USD)</th><th>P/L (${esc(cur)})</th><th>Opened</th></tr>
+      ${pos.map(p => `<tr><td>${esc(p.symbol)}</td><td>${p.qty}</td><td>${money(p.avg_price)}</td><td>${money(p.price)}</td><td>${money(p.value)}</td><td class="${cls(p.unrealised)}">${pct(p.unrealised)}</td><td class="${cls(p.gain)}">${money(p.gain)} (${pct(p.gain_share)})</td><td>${esc(p.opened_day)}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No open positions.</td></tr>'}</table></div>
       <div class="card"><h2>Recent trades</h2><table><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price (USD)</th><th>Fees (${esc(cur)})</th><th>P/L (${esc(cur)})</th><th>Reason</th></tr>
       ${tr.trades.map(t => `<tr><td>${when(t.ts)}</td><td>${esc(t.symbol)}</td><td>${t.side}</td><td>${t.qty}</td><td>${money(t.price)}</td><td>${money(t.fee)}</td><td class="${cls(t.pnl)}">${t.side === "SELL" ? money(t.pnl) : ""}</td><td>${esc(t.reason)}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No trades yet.</td></tr>'}</table></div></div>`;
   },
@@ -175,8 +179,8 @@ const views = {
   },
 
   async "Decisions"() {
-    const rows = await get("/api/latest");
-    let html = `<div class="card"><h2>Latest decision per symbol</h2><p class="muted">score = conviction × skill-weighted votes of the models with measured skill (the technical rule is one of them); no skill means score 0 and waiting. A BUY or SELL signal (≥ +0.15 / ≤ −0.15) must repeat 3 rounds in a row before it is acted on; buys are paced (1 per round, 2 per day). Stop loss and max hold act at once. Click a row for its history and inputs.</p>
+    const [rows, s] = await Promise.all([get("/api/latest"), get("/api/status")]);
+    let html = `<div class="card"><h2>Latest decision per symbol</h2><p class="muted">${s.strategy === "index" ? NOT_ACTED + "With <code>--strategy models</code>: " : ""}score = conviction × skill-weighted votes of the models with measured skill (the technical rule is one of them); no skill means score 0 and waiting. A BUY or SELL signal (≥ +0.15 / ≤ −0.15) must repeat 3 rounds in a row before it is acted on; buys are paced (1 per round, 2 per day). Stop loss and max hold act at once. Click a row for its history and inputs.</p>
       <table><tr><th>Symbol</th><th>Action</th><th>Score</th><th>Technical (raw)</th><th>Models</th><th>Votes (weight)</th><th>Headlines</th><th>Outcome</th><th>At</th></tr>
       ${rows.map(d => `<tr class="click" data-sym="${esc(d.symbol)}"><td><b>${esc(d.symbol)}</b></td><td>${d.action}</td><td>${scoreBar(d.score)}</td>
         <td class="${cls(d.components.technical)}">${d.components.technical.toFixed(3)}</td><td class="${cls(d.components.models)}">${d.components.models.toFixed(3)} <span class="muted">× ${d.components.conviction ?? d.components.model_share}</span></td>
@@ -198,11 +202,11 @@ const views = {
   },
 
   async "Models"() {
-    const m = await get("/api/models");
+    const [m, s] = await Promise.all([get("/api/models"), get("/api/status")]);
     const names = Object.keys(m.history);
     const skill = names.map((n, i) => ({name: n, points: m.history[n].map(h => [Date.parse(h.ts), h.skill || 0])}));
     const auc = names.map((n, i) => ({name: n, points: m.history[n].map(h => [Date.parse(h.ts), h.auc || .5])}));
-    let html = `<div class="card"><h2>Leaderboard</h2><p class="muted">Validation is the latest quarter of the history, after an embargo. Skill = Brier skill score against always predicting the base rate (> 0 beats it). Weight = skill when there are enough validation samples. Conviction is <b>${Math.round((m.conviction || 0) * 100)}%</b>: decisions act on that share of the skill-weighted vote (0% means no model has skill and the trader waits). Trained ${when(m.trained_at)}.</p>
+    let html = `<div class="card"><h2>Leaderboard</h2><p class="muted">${s.strategy === "index" ? NOT_ACTED : ""}Validation is the latest quarter of the history, after an embargo. Skill = Brier skill score against always predicting the base rate (> 0 beats it). Weight = skill when there are enough validation samples. Conviction is <b>${Math.round((m.conviction || 0) * 100)}%</b>: decisions act on that share of the skill-weighted vote (0% means no model has skill and the trader waits). Trained ${when(m.trained_at)}.</p>
       <table><tr><th>Model</th><th>Weight</th><th>Skill</th><th>AUC</th><th>Accuracy</th><th>Majority</th><th>Validation n</th><th>Train n</th><th>Label</th></tr>
       ${m.latest.map(r => `<tr><td><b>${esc(r.model)}</b></td><td>${r.weight}</td><td class="${cls(r.metrics.skill)}">${(r.metrics.skill ?? 0).toFixed(4)}</td><td>${(r.metrics.auc ?? .5).toFixed(3)}</td>
         <td>${pct(r.metrics.accuracy, 1).replace("+", "")}</td><td>${pct(r.metrics.majority, 1).replace("+", "")}</td><td>${r.val_n}</td><td>${r.train_n}</td><td class="muted">${esc(r.details.label || "")}${r.details.continued_from ? `<br>continued from ${when(r.details.continued_from)}, weights moved ${r.details.weight_change}` : ""}</td></tr>`).join("") || '<tr><td colspan="9" class="muted">Not trained yet (the catch-up runs first).</td></tr>'}</table></div>

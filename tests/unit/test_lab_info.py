@@ -74,7 +74,7 @@ class FakeSEC:
                 return (FIX / "filing-index.htm").read_text().replace("CIKNUM", cik).replace("ACCDIR", acc).encode()
             if name == "ex991.htm":
                 return (FIX / ("ex991-positive.htm" if int(acc) // 2 % 2 == 0 else "ex991-negative.htm")).read_bytes()
-        raise OSError(f"404 {url}")
+        raise edgar.NotFound(f"404 {url}")
 
 
 def client(tmp_path, transport=None, clock=None, **kw) -> edgar.Client:
@@ -529,9 +529,10 @@ def test_survivorship_measures_find_planted_late_winners_and_bound_with_stated_a
     assert all(np.isfinite(c["share"]) for c in cov)
     assert list(S.first_rows(p)) == list(first)
     ent = S.entrants(p, lo, hi)
-    assert ent["late"] >= 8 and ent["present"] == 28 and ent["mean_gap"] > 0.2 and ent["mean_gap"] > 2 * ent["se_gap"]
+    assert ent["late"] >= 8 and ent["present"] == 28 and ent["used"] == ent["late"] and ent["median_gap"] > 0.5
+    assert ent["yearly_used"] == ent["used"] and ent["median_per_year"] > 0.2  # every planted span is over a year
     null = S.entrants(late_world(0.0)[0], lo, hi)
-    assert abs(null["mean_gap"]) < 2 * null["se_gap"]
+    assert abs(null["median_gap"]) < 0.35 and null["median_gap"] < ent["median_gap"] / 2
     bound = S.exit_bound(5.0)
     assert len(bound) == 12 and max(b["per_year"] for b in bound) == pytest.approx(0.035)
     assert min(b["per_year"] for b in bound) == 0.0 and bound[-1]["cumulative"] == pytest.approx(1.035 ** 5 - 1)
@@ -539,6 +540,72 @@ def test_survivorship_measures_find_planted_late_winners_and_bound_with_stated_a
     assert [r["year"] for r in ew] == [2019, 2020, 2021] and all(np.isfinite(r["diff"]) for r in ew)
     note = S.report((date(2019, 1, 1), date(2023, 12, 31)), cov, ent, ew, bound)
     assert "assumptions (not data)" in note and "not free" in note
+
+
+def short_span_world():
+    """Ten names rising 10 % a month, an entrant that lost 40 % in its 42 sessions (annualised, the old sentence could only
+    say something impossible), and one that listed long ago in the window and halved. Rows 0 to 350 are before the window."""
+    T, N = 500, 12
+    close = 100.0 * np.exp(np.arange(T)[:, None] * np.log(1.1) / 21.0) * np.ones((T, N))
+    short, long_ = 10, 11
+    close[: T - 43, short] = np.nan
+    close[T - 22:, short] = close[T - 22, 0] * np.linspace(1.0, 0.6, 22)  # falls from its 21st session on
+    close[: 150, long_] = np.nan
+    close[171:, long_] = 100.0 * np.linspace(1.0, 0.5, T - 171)
+    dates = business_days(date(2018, 1, 1), T)
+    market = 100.0 * np.exp(np.arange(T) * np.log(1.05) / 21.0)
+    return Panel.from_arrays(dates, [f"S{j}" for j in range(N)], close, close, close, close, np.full((T, N), 1e7), market)
+
+
+@pytest.mark.requirement(REQ)
+def test_a_short_span_entrant_is_compared_in_total_and_the_note_cannot_state_an_impossible_figure():
+    p = short_span_world()
+    lo, hi = 100, len(p.dates) - 1
+    ent = S.entrants(p, lo, hi)
+    assert ent["late"] == 2 and ent["present"] == 10 and ent["used"] == 2
+    by = {r["symbol"]: r for r in ent["rows"]}
+    short, long_ = by["S10"], by["S11"]
+    assert short["sessions"] == 21 and long_["sessions"] > 252
+    growth = p.close[hi, 0] / p.close[hi - 21, 0]
+    own = p.close[hi, 10] / p.close[hi - 21, 10]
+    assert short["gap"] == pytest.approx(own / growth - 1.0)  # the same sessions as the basket
+    assert (own ** 12 - growth ** 12) < -1.0  # the old annualised difference, under -100 %: nothing to hold could do that
+    assert -1.0 < short["gap"] < 0 and np.isnan(short["per_year"])  # a span under a year is never annualised
+    assert -1.0 < long_["per_year"] < 0 and long_["per_year"] == pytest.approx((1 + long_["gap"]) ** (252 / long_["sessions"]) - 1)
+    assert ent["median_gap"] == pytest.approx(float(np.median([short["gap"], long_["gap"]])))
+    assert ent["yearly_used"] == 1 and ent["median_per_year"] == pytest.approx(long_["per_year"])
+    note = S.report((p.dates[lo], p.dates[hi]), S.coverage(p, lo, hi), ent, S.ew_minus_market(p, lo, hi), S.exit_bound(1.0))
+    line = next(x for x in note.splitlines() if x.startswith("- Late entrants"))
+    assert "2 names listed inside the window" in line and "2 of 2 entrants compared" in line and "in total over its span" in line
+    figures = [float(x) for x in re.findall(r"([+-]\d+(?:\.\d+)?)%", line)]
+    assert len(figures) == 2 and all(x > -100.0 for x in figures)
+    alone = S.entrants(short_only(p), lo, hi)  # only short spans: no yearly figure at all
+    assert alone["used"] == 1 and alone["yearly_used"] == 0 and np.isnan(alone["median_per_year"])
+    assert "no yearly figure" in S._entrants_line(alone) and "per year" not in S._entrants_line(alone).replace("not per year", "")
+
+
+def short_only(p: Panel) -> Panel:
+    keep = [j for j in range(len(p.symbols)) if j != 11]
+    return Panel.from_arrays(p.dates, [p.symbols[j] for j in keep], p.open[:, keep], p.high[:, keep], p.low[:, keep], p.close[:, keep],
+                             p.volume[:, keep], p.market_close)
+
+
+@pytest.mark.requirement(REQ)
+def test_the_entrant_comparison_reads_nothing_after_the_window():
+    p = short_span_world()
+    arrays = {"close": p.close}
+    hi = 400
+
+    def compute(a: dict) -> np.ndarray:
+        q = Panel.from_arrays(p.dates[: len(a["close"])], p.symbols, a["close"], a["close"], a["close"], a["close"],
+                              p.volume[: len(a["close"])], p.market_close[: len(a["close"])])
+        ent = S.entrants(q, 100, hi)
+        out = np.full((len(a["close"]), 2), np.nan)
+        out[hi] = (ent["used"], ent["median_gap"])
+        return out
+
+    leakcheck.assert_no_lookahead(compute, arrays, cuts=(hi,))
+    assert S.entrants(p, 100, hi)["used"] >= 1
 
 
 # --- the services end to end -------------------------------------------------------------------------------------------------
@@ -660,6 +727,34 @@ def test_the_h_i3_service_writes_the_bound_and_its_assumptions(lab):
     assert m["late_entrants"] == 0 and m["bound_worst_per_year"] == pytest.approx(0.035)
     with pytest.raises(LookRefused):
         I3.run(ctx_for(lab / "lab", I3.SERVICE_ID, {"window": "holdout"}, "i3-holdout"))
+
+
+@pytest.mark.requirement(REQ)
+def test_the_h_i3_service_takes_over_an_earlier_table_and_stores_a_yearly_figure_only_for_long_spans(lab, monkeypatch):
+    sid = "h-i3-later"
+    ctx = ctx_for(lab / "lab", sid, {}, "i3a")
+    old = ctx.db()
+    old.execute("CREATE TABLE i3_entrants (run_id TEXT, symbol TEXT, first_bar TEXT, excess REAL, peers REAL, gap REAL)")
+    old.execute("INSERT INTO i3_entrants VALUES ('old', 'S1', '2019-02-01', -9.0, 0.1, -9.1)")  # an annualised row of an earlier run
+    old.commit()
+    old.close()
+    panel, _ = late_world(0.002)
+    monkeypatch.setattr(I3.Panel, "from_db", classmethod(lambda cls, path: panel))
+    I3.run(ctx)
+    rows = table(lab, sid, "SELECT run_id, gap, sessions, per_year FROM i3_entrants WHERE run_id != 'old'")
+    assert rows and all(g > -1.0 and n > 0 for _, g, n, _ in rows)
+    assert table(lab, sid, "SELECT sessions, per_year FROM i3_entrants WHERE run_id = 'old'") == [(None, None)]
+    measured = table(lab, sid, "SELECT per_year, note FROM i3_bound WHERE kind='measured'")
+    assert len(measured) == 1 and measured[0][0] > -1.0 and "at least 252 sessions" in measured[0][1]
+    m = check_result(ctx, I3.VARIANTS)
+    assert m["late_gap_used"] == m["late_entrants"] > 0 and m["late_gap_per_year"] == pytest.approx(measured[0][0])
+    short = short_only(short_span_world())  # its one entrant has a span of 21 sessions
+    monkeypatch.setattr(I3.Panel, "from_db", classmethod(lambda cls, path: short))
+    sid = "h-i3-short"
+    I3.run(ctx_for(lab / "lab", sid, {}, "i3b"))
+    assert table(lab, sid, "SELECT per_year FROM i3_bound WHERE kind='measured'") == []
+    note = (lab / "lab" / "services" / sid / "survivorship.md").read_text()
+    assert "no yearly figure" in note
 
 
 # --- cards, isolation, no addresses ------------------------------------------------------------------------------------------

@@ -74,34 +74,55 @@ class Ctx:
     def window(self, family: str) -> tuple:
         """The evaluation window this run may read (plan rule 8). Development unless the config asks for the selection
         window, which each family may read once (`selection_look`); the holdout is never handed to a service."""
+        dates = self.window_dates(family)
+        if self.config.get("window", "development") == "selection":
+            self.selection_look(family, str(self.config.get("purpose") or ""))
+        return dates
+
+    def window_dates(self, family: str) -> tuple:
+        """The dates `window` would hand out, refused the same way, with no look taken. For a service that fetches or checks
+        data before it scores anything: it asks here first and calls `window` just before the first score, so a failure on
+        the way costs no look. What it reads from the window in between must not include any outcome."""
         from ..splits import window
         name = self.config.get("window", "development")
         if name == "development":
             return window(name)
         if name == "selection":
-            self.selection_look(family, str(self.config.get("purpose") or ""))
+            con = self._looks()
+            try:
+                self._refuse_look(con, family, str(self.config.get("purpose") or ""))
+            finally:
+                con.close()
             return window(name)
         raise LookRefused(f"a service may read the development or the selection window, not {name!r}: the holdout is "
                           "read once, by hand, through HoldoutGuard")
+
+    def _looks(self) -> sqlite3.Connection:
+        con = sqlite3.connect(self.lab_root / "looks.db", timeout=30)
+        con.execute("CREATE TABLE IF NOT EXISTS looks (family TEXT, service_id TEXT, run_id TEXT, purpose TEXT, ts TEXT, "
+                    "PRIMARY KEY (family, service_id))")
+        return con
+
+    def _refuse_look(self, con: sqlite3.Connection, family: str, purpose: str) -> None:
+        """Raises LookRefused when this service may not take `family`'s look for `purpose`."""
+        if not purpose:
+            raise LookRefused("a look at the selection window needs a purpose in the config (each family gets one)")
+        rows = con.execute("SELECT service_id, run_id, purpose, ts FROM looks WHERE family=?", (family,)).fetchall()
+        first = rows[0] if rows else None
+        if first and first[2] != purpose:
+            raise LookRefused(f"the {family} family already read the selection window for {first[2]!r} ({first[0]}, run "
+                              f"{first[1]}, {first[3]}): its one look has another purpose")
+        mine = [r for r in rows if r[0] == self.service_id]
+        if mine:
+            raise LookRefused(f"{self.service_id} already read the selection window (run {mine[0][1]}, {mine[0][3]})")
 
     def selection_look(self, family: str, purpose: str) -> None:
         """Records this service's part in the one look at the selection window that `family` may take. The look is one
         purpose: every candidate of the family that passed T1 confirms under that same purpose, once per service; a
         second purpose, or the same service again, is refused."""
-        if not purpose:
-            raise LookRefused("a look at the selection window needs a purpose in the config (each family gets one)")
-        con = sqlite3.connect(self.lab_root / "looks.db", timeout=30)
+        con = self._looks()
         try:
-            con.execute("CREATE TABLE IF NOT EXISTS looks (family TEXT, service_id TEXT, run_id TEXT, purpose TEXT, ts TEXT, "
-                        "PRIMARY KEY (family, service_id))")
-            rows = con.execute("SELECT service_id, run_id, purpose, ts FROM looks WHERE family=?", (family,)).fetchall()
-            first = rows[0] if rows else None
-            if first and first[2] != purpose:
-                raise LookRefused(f"the {family} family already read the selection window for {first[2]!r} ({first[0]}, run "
-                                  f"{first[1]}, {first[3]}): its one look has another purpose")
-            mine = [r for r in rows if r[0] == self.service_id]
-            if mine:
-                raise LookRefused(f"{self.service_id} already read the selection window (run {mine[0][1]}, {mine[0][3]})")
+            self._refuse_look(con, family, purpose)
             con.execute("INSERT INTO looks VALUES (?,?,?,?,?)", (family, self.service_id, self.run_id, purpose,
                                                                  datetime.now(timezone.utc).isoformat(timespec="seconds")))
             con.commit()

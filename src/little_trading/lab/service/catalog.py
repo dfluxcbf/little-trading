@@ -508,4 +508,19 @@ def lab_phases(trees: dict) -> dict[str, dict]:
     out["x1-qlib-native"] = {**out["x1-qlib-check"], "title": "X1 with Qlib's own LGBModel, in a Python 3.12 environment",
                              "env": {"python": "python3.12", "requirements": ["pyqlib==0.9.7", "lightgbm==4.6.0", "numpy==2.3.5",
                                                                               "pandas==2.3.3", "scikit-learn==1.7.2"]}}
+    out["s1-strategies"] = {
+        "title": "S1: six strategies from market value and earnings news, alone or together, through one slow 5-name layer",
+        "hypothesis": "S1 (docs/plans/strategies.md): value and quality as filed and the reaction to earnings news last long "
+                      "enough to trade rarely, so a 5-name book swapping at most 2 names a quarter keeps more net profit at "
+                      "10,000 SEK than the champion layer (prior: low)",
+        "kind": "experiment",
+        "entry": "little_trading.lab.services.s1_strategies",
+        "config": {"learner": "trees", "trees_params": trees, "seeds": [0, 1, 2], "refit_every": 126,
+                   "accounts": [10000, 50000, 250000], "planted_ics": [0.05, 0.1, 0.3], "noise_runs": 200, "planted_runs": 5,
+                   "broker": "avanza-mini", "slippage": 0.0005, "rate": 5, "submissions_max_age_hours": 168,
+                   "facts_max_age_hours": 168, "acceptance_tz": "America/New_York"},
+        "env": "nn",
+        "schedule": {"kind": "none"},
+        "resources": {"threads": 4, "memory_mb": 4096, "timeout_s": 21600},
+    }
     return out

@@ -24,10 +24,10 @@ All under `src/little_trading/`, standard library only.
 | `learners.py` | Logistic regression, pattern nearest neighbours, news naive Bayes, the lexicon as a model; metrics |
 | `training.py` | Look-ahead-free datasets, walk-forward validation, skill weights, `ModelSet`, training lessons |
 | `newsfeed.py` | Yahoo and Google News RSS, live and date-range backfill, cross-provider dedupe |
-| `engine.py` | The dry-run trader: decision from technical score and skill-weighted votes, ranked buys, exits |
+| `engine.py` | The dry-run trader: decision from technical score and skill-weighted votes; holds SPY (`--strategy index`, the default) or trades ranked buys and exits (`--strategy models`) |
 | `evaluation.py` | Matured live decisions, round trips, live lessons |
 | `universe.py` | Fixed companies, candidate pool, Yahoo screener, ranking with hysteresis |
-| `server.py` | `serve --dry-run`: catch-up, news, trade, daily and heartbeat loops in threads; the dynamic selection |
+| `server.py` | `serve --dry-run`: catch-up, news, trade, daily and heartbeat loops in threads; the dynamic selection; after the close, the finished session's bars for every stored company |
 | `web.py`, `webpage.py` | Read-only JSON API and the single-page web app |
 | `pwa.py` | What makes the web app installable on a phone: manifest, service worker, icons drawn as PNG |
 | `report.py` | Markdown report for Claude |
@@ -47,7 +47,7 @@ All under `src/little_trading/`, standard library only.
   checks between fetches and waits up to a minute for the running steps. A `running` marker, cleared on a
   clean stop, and a one-minute heartbeat tell the next start how and when the previous run ended. The news,
   trade and daily loops wait for the catch-up's `ready` event.
-- Models: `models/current.json` is what trades; `models/history/` keeps each training run (logistic weights,
+- Models: `models/current.json` is what decides, and what trades under `--strategy models`; `models/history/` keeps each training run (logistic weights,
   calibration, naive Bayes counts; not the neighbours' shapes, which are rebuilt from prices).
 - The web page is a Python string (`webpage.py`) so the wheel needs no package data; it uses no CDN and
   escapes everything from feeds before display.

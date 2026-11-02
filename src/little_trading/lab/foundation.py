@@ -22,6 +22,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .forward_log import scorable
+
 CHANNELS = ("open", "high", "low", "close", "volume")
 
 
@@ -50,16 +52,16 @@ def _ffill(a: np.ndarray) -> np.ndarray:
 
 
 def session_history(panel, row: int, context_len: int, min_history: int) -> tuple[dict, np.ndarray]:
-    """The input of session `row`: the last `context_len` rows up to and including `row`, and a mask of the names that
-    are tradable at `row` with at least `min_history` known closes in that window."""
+    """The input of session `row`: the last `context_len` rows up to and including `row`, and a mask of the names every
+    forward scorer may score at `row` (`forward_log.scorable`, which needs a real bar) with at least `min_history` known
+    closes in that window. Bars missing earlier in the window are forward-filled for the model; the scored session is not."""
     lo = max(0, row - context_len + 1)
     hist = {k: _ffill(getattr(panel, k)[lo:row + 1]) for k in CHANNELS}
     hist["rows"] = np.arange(lo, row + 1)
     hist["dates"] = list(panel.dates[lo:row + 1])
     hist["symbols"] = list(panel.symbols)
     known = np.isfinite(hist["close"]).sum(axis=0)
-    tradable = panel.tradable[row] if panel.tradable is not None else np.isfinite(panel.close[row])
-    return hist, tradable & (known >= min_history) & np.isfinite(hist["close"][-1])
+    return hist, scorable(panel, row) & (known >= min_history)
 
 
 def score_session(panel, row: int, forecaster: Forecaster, context_len: int, min_history: int | None = None) -> tuple[np.ndarray, dict]:

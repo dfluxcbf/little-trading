@@ -19,13 +19,16 @@ def _mean(xs: list[float]) -> float | None:
 
 
 def matured(store: Store, horizon: int) -> list[dict]:
-    """Decisions with a forward return; one per symbol and day (the day's last round)."""
+    """Decisions with a forward return; one per symbol and day (the day's last round). SPY decided as the index the
+    trader holds is left out: its votes say nothing about stocks, and a SPY named as a company still counts."""
     rows = decode(store.query(
         "SELECT d.* FROM decisions d JOIN (SELECT symbol, substr(ts, 1, 10) AS day, MAX(id) AS id FROM decisions"
         " GROUP BY symbol, day) last ON last.id = d.id ORDER BY d.ts"), "components")
     closes: dict[str, list[tuple[str, float]]] = {}
     out = []
     for r in rows:
+        if r["components"].get("market"):
+            continue
         sym = r["symbol"]
         if sym not in closes:
             closes[sym] = [(b.time.date().isoformat(), b.close) for b in store.bars(sym)]
@@ -93,9 +96,12 @@ def round_trips(store: Store) -> list[dict]:
     out = []
     for t in store.query("SELECT * FROM trades ORDER BY id"):
         if t["side"] == "BUY":
+            if b := open_buys.get(t["symbol"]):  # an addition: the entry stays the first, at the average price
+                qty = b["qty"] + t["qty"]
+                t = {**b, "qty": qty, "price": (b["qty"] * b["price"] + t["qty"] * t["price"]) / qty}
             open_buys[t["symbol"]] = t
         elif (b := open_buys.pop(t["symbol"], None)) is not None:
-            kind = next((k for k in ("stop loss", "max hold", "SELL score") if t["reason"].startswith(k)), "other")
+            kind = next((k for k in ("stop loss", "max hold", "SELL score", "index strategy") if t["reason"].startswith(k)), "other")
             out.append({"symbol": t["symbol"], "entry": b["ts"], "exit": t["ts"], "entry_price": b["price"],
                         "exit_price": t["price"], "qty": t["qty"], "pnl": round(t["pnl"], 2),
                         "return": round(t["price"] / b["price"] - 1.0, 5), "exit_kind": kind,

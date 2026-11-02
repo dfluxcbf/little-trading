@@ -16,6 +16,13 @@ is stored with its inputs, votes and the reason for what was done.
 Money is in the account's currency (`broker.py`): a SEK account at Avanza or Nordnet pays courtage with a minimum
 and a currency-conversion fee on each fill and buys whole shares; prices, stop losses and gains per share stay in
 USD. The portfolio keeps the broker it was opened with; another one takes `--start-fresh`.
+
+`TraderConfig.strategy` says what the money does (REQ-000000035). `models` trades on the signals as described above.
+`index`, what `serve` runs by default, holds the market index fund: every decision is still computed and stored and
+none is acted on, with the outcome `not_acted`, or `held`, `bought` or `sold` for a position the index strategy itself
+kept or moved. `Trader._hold_index` is what trades. It sells anything else and buys SPY in whole shares with the cash
+that covers them and their costs, each at a price of today only. SPY is never sold by a stop loss, the maximum hold or
+a score.
 """
 from __future__ import annotations
 
@@ -32,12 +39,14 @@ from .models import Bar
 from .restricted import Restrictions
 from .store import Store
 from .strategy import technical_score
-from .training import ModelSet, available_from
+from .training import ET, MARKET, ModelSet, available_from
 
 VOTE_UNIT = 0.10
 NEWS_HOURS = 72
 NEWS_HALF_LIFE_H = 24.0
 BUY_AT, SELL_AT = 0.15, -0.15
+INDEX, MODELS = "index", "models"
+STRATEGIES = (INDEX, MODELS)
 
 
 @dataclass
@@ -52,6 +61,7 @@ class TraderConfig:
     max_buys_per_round: int = 1
     max_buys_per_day: int = 2
     cooldown_sessions: int = 2  # a stock sold is not bought back for this many sessions
+    strategy: str = MODELS  # `INDEX` holds SPY and only records the models' decisions; the CLI defaults to it
 
 
 def business_days(a: date, b: date) -> int:
@@ -67,8 +77,16 @@ def _clip(x: float) -> float:
     return max(-1.0, min(1.0, x))
 
 
+def _priced_today(bars: list[Bar] | None, now: datetime) -> bool:
+    """Whether the newest bar is from `now`'s session: the chart can lack today's row, and the stored bars then end
+    days ago."""
+    return bool(bars) and bars[-1].time.astimezone(ET).date() == now.astimezone(ET).date()
+
+
 class Trader:
     def __init__(self, store: Store, spec: HorizonSpec, config: TraderConfig, restrictions: Restrictions):
+        if config.strategy not in STRATEGIES:
+            raise ValueError(f"unknown strategy {config.strategy!r}: choose one of {', '.join(STRATEGIES)}")
         self.store, self.spec, self.config, self.restrictions = store, spec, config, restrictions
         self.models: ModelSet | None = None
         pf = store.get_meta("portfolio")
@@ -171,7 +189,10 @@ class Trader:
             raise
 
     def _round(self, history: dict[str, list[Bar]], market: list[Bar], now: datetime, usdsek: float | None) -> dict:
-        self.restrictions.check([*history, *self.portfolio["positions"]])
+        index = self.config.strategy == INDEX
+        if index and market and MARKET not in history:  # SPY has its price of the round from the round it is bought in
+            history = {**history, MARKET: market}
+        self.restrictions.check([*history, *self.portfolio["positions"], *([MARKET] if index else [])])
         fx = self.broker.rate_in(usdsek)  # before anything is stored: a SEK account cannot trade without the rate
         self.store.set_meta("usdsek", usdsek)
         n_round = (self.store.get_meta("rounds", 0) or 0) + 1
@@ -194,6 +215,11 @@ class Trader:
                 held = business_days(date.fromisoformat(pos["opened_day"]), now.date())
                 change = d["price"] / pos["avg_price"] - 1.0
                 d["inputs"]["position"] = {**pos, "held_sessions": held, "unrealised": round(change, 4)}
+            if index:
+                d["outcome"], d["detail"] = "not_acted", f"not acted on, the index strategy holds {MARKET}: {d['why']}"
+                if sym == MARKET:  # kept for the web app and left out of the live evaluation: not a stock prediction
+                    d["components"]["market"] = True
+            elif pos:
                 reason = (f"stop loss {change:+.1%}" if change <= -spec.stop_loss else
                           f"max hold {held} sessions" if held >= spec.max_hold else
                           f"SELL score {d['score']:+.2f} confirmed over {d['streak']} rounds"
@@ -211,6 +237,7 @@ class Trader:
             elif d["action"] == "BUY" and not confirmed:
                 d["outcome"], d["detail"] = "waiting", f"BUY signal {d['streak']}/{cfg.confirm_rounds} rounds, confirming"
             decisions.append(d)
+        fills = self._hold_index(history, market, decisions, now, ts, fx) if index else None
         equity = self.equity(prices, fx)
         today = now.date().isoformat()
         bought_today = self.store.query("SELECT COUNT(*) AS n FROM trades WHERE side = 'BUY' AND substr(ts, 1, 10) = ?",
@@ -266,11 +293,74 @@ class Trader:
                    "cash": round(pf["cash"], 2), "positions": sorted(pf["positions"]),
                    "actions": {a: sum(d["action"] == a for d in decisions) for a in ("BUY", "SELL", "HOLD")},
                    "outcomes": {o: sum(d["outcome"] == o for d in decisions)
-                                for o in ("bought", "sold", "held", "waiting", "buy_refused", "idle")}}
+                                for o in ("bought", "sold", "held", "waiting", "buy_refused", "idle", "not_acted")},
+                   "strategy": cfg.strategy}
+        if fills:  # the index strategy's fills count without a decision: a symbol with a short history has none
+            summary["outcomes"].update(bought=fills["bought"], sold=fills["sold"])
+            summary["index"] = fills["note"]
         self.store.set_meta("last_round_at", ts)
-        self.store.log("trade", f"round {n_round}: equity {equity:,.2f}, "
-                                f"{summary['outcomes']['bought']} bought, {summary['outcomes']['sold']} sold", **summary)
+        self.store.log("trade", f"round {n_round}: equity {equity:,.2f}, {summary['outcomes']['bought']} bought, "
+                                f"{summary['outcomes']['sold']} sold" + (f"; {fills['note']}" if fills else ""), **summary)
         return summary
+
+    def _hold_index(self, history: dict[str, list[Bar]], market: list[Bar], decisions: list[dict], now: datetime, ts: str,
+                    fx: float) -> dict:
+        """The index strategy's orders for one round: sells everything but SPY, then buys SPY in whole shares with all
+        the cash, at today's market bar's close plus slippage, when at least one share fits with its costs. A symbol
+        without a bar of today is not traded: an old close would stay in the entry or the gain for good, and a later
+        round has a price. Returns the fills and a note on them."""
+        pf, cfg = self.portfolio, self.config
+        decided = {d["symbol"]: d for d in decisions}
+        sold = 0
+        for sym in [s for s in pf["positions"] if s != MARKET]:
+            if not _priced_today(history.get(sym), now):
+                self.store.log("trade", f"{sym}: no price of today, so the index strategy sells it in a later round",
+                               "warning", symbol=sym)
+                continue
+            reason = f"index strategy: sold to hold {MARKET}"
+            self._sell(sym, history[sym][-1].close, ts, reason, fx)
+            sold += 1
+            if d := decided.get(sym):
+                d["outcome"], d["detail"] = "sold", f"{reason}; the models' decision was not acted on: {d['why']}"
+        bought, reason = 0, None
+        quote = market[-1].close if _priced_today(market, now) else None
+        if not quote:
+            note = f"no {MARKET} price of today, nothing bought"
+            self.store.log("trade", note, "warning", symbol=MARKET)
+        else:
+            price = quote * (1 + cfg.slippage)
+            qty = self.broker.quantity(pf["cash"], price, fx)
+            if qty < 1:
+                note = (f"one more {MARKET} share costs {self.broker.buy(1, price, fx)['cash']:,.2f} "
+                        f"{self.broker.currency} with fees, the cash is {pf['cash']:,.2f}")
+            else:
+                cost = self.broker.buy(qty, price, fx)
+                pf["cash"] -= cost["cash"]
+                pos = pf["positions"].get(MARKET)
+                if pos:
+                    total = pos["qty"] + qty
+                    pos.update(avg_price=(pos["qty"] * pos["avg_price"] + qty * price) / total, qty=total,
+                               cost=pos.get("cost", pos["qty"] * pos["avg_price"] + pos["buy_fee"]) + cost["cash"],
+                               buy_fee=pos["buy_fee"] + cost["fee"])
+                else:
+                    pf["positions"][MARKET] = {"qty": qty, "avg_price": price, "cost": cost["cash"],
+                                               "buy_fee": cost["fee"], "opened": ts,
+                                               "opened_day": now.date().isoformat(), "entry_score": 0.0}
+                reason = f"index strategy: bought {MARKET} with the available cash"
+                self.store.add_trade({"ts": ts, "symbol": MARKET, "side": "BUY", "qty": qty, "price": price,
+                                      "fee": cost["fee"], "pnl": 0.0, "reason": reason, "software": __version__,
+                                      "fx": cost["fx"], "courtage": cost["courtage"], "fx_fee": cost["fx_fee"],
+                                      "amount": -cost["cash"]})
+                bought, note = 1, f"bought {qty} {MARKET} at {price:.2f} USD"
+        if d := decided.get(MARKET):
+            if pos := pf["positions"].get(MARKET):
+                d["outcome"] = "bought" if bought else "held"
+                d["detail"] = (f"{reason or 'index strategy: kept'}, {d['price'] / pos['avg_price'] - 1.0:+.1%} since "
+                               f"bought, sold by no stop loss, maximum hold or score; the models' decision is not "
+                               f"acted on: {d['why']}")
+            else:
+                d["detail"] = f"{note}; {d['detail']}"
+        return {"bought": bought, "sold": sold, "note": note}
 
     def mark(self, prices: dict[str, float], market_price: float | None, now: datetime,
              usdsek: float | None = None) -> float:

@@ -1,10 +1,7 @@
-# Requirements written in this branch, not yet registered in little-workshop
+# Requirements written for the improvement lab, and their tests
 
-The session that built these phases had no little-workshop tools (no `workshop_*` MCP tools, no `lws`), so it could not
-check `workshop_requirements_list`, create the requirements, record the sandbox test run, or start and finish the
-branches. The ids below follow the user's statement that the next free id was REQ-000000027; **check them with
-`workshop_requirements_list` before registering**, and if one is taken, renumber the tags in the named test file and in
-this file together. Every test carries `@pytest.mark.requirement("REQ-...")`.
+All of these were registered in little-workshop on 2026-11-01 under these ids (the wording of REQ-000000029 to 031 was adjusted
+to pass the EARS check). REQ-000000033, REQ-000000034 and REQ-000000035 were added after them. This table stays as the map from id to tests.
 
 | Id | Phase | EARS text | Tests |
 |---|---|---|---|

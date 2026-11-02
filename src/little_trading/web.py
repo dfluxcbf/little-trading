@@ -51,8 +51,13 @@ class Api:
         for sym, p in pf["positions"].items():
             last = self.store.query("SELECT price, ts FROM decisions WHERE symbol = ? ORDER BY id DESC LIMIT 1", [sym])
             price = last[0]["price"] if last else p["avg_price"]
-            out.append({"symbol": sym, **p, "price": price, "value": round(price * p["qty"] * fx, 2) if fx else None,
-                        "unrealised": round(price / p["avg_price"] - 1, 4)})
+            value = price * p["qty"] * fx
+            cost = p.get("cost", p["qty"] * p["avg_price"] + p["buy_fee"])  # older positions: the USD account
+            # `unrealised` is the USD price per share; `gain` is what the account made, its fees and exchange rate in
+            out.append({"symbol": sym, **p, "price": price, "value": round(value, 2) if fx else None,
+                        "unrealised": round(price / p["avg_price"] - 1, 4),
+                        "gain": round(value - cost, 2) if fx else None,
+                        "gain_share": round((value - cost) / cost, 4) if fx and cost else None})
         return out
 
     def trades(self, q):

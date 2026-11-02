@@ -89,12 +89,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="companies picked every day on top of the fixed ones (default 30; 0 turns it off)")
     sv.add_argument("--no-screener", action="store_true",
                     help="pick dynamic companies from the built-in pool only, not Yahoo's most active stocks")
+    sv.add_argument("--no-refresh-universe", action="store_true",
+                    help="after the close, store the session's bars for the watched companies only, not for every stored one")
     sv.add_argument("--starting", type=_number(float, 0, low_open=True), default=10_000.0, metavar="AMOUNT_MONEY",
                     help="fake money to start with, in the broker's account currency (SEK); used the first time a "
                          "data directory is used, or with --start-fresh")
     sv.add_argument("--broker", choices=list(broker.BROKERS), default=broker.DEFAULT,
                     help=f"courtage and currency-conversion costs of a SEK account (default {broker.DEFAULT}); a "
                          "portfolio keeps the broker it was opened with, --start-fresh opens one at another")
+    sv.add_argument("--strategy", choices=["index", "models"], default="index",
+                    help="index (default): hold SPY in whole shares and only record the models' decisions; models: "
+                         "trade on the skill-weighted models")
     sv.add_argument("--start-fresh", action="store_true",
                     help="archive the previous dry run and start a new one: new portfolio, no past decisions, trades, "
                          "equity, lessons or selections; prices, news and model history are kept")
@@ -193,9 +198,9 @@ def _serve(args) -> int:
 
     restricted.load().check(args.symbols)
     cfg = ServerConfig(symbols=args.symbols, dynamic=args.dynamic, screener=not args.no_screener,
-                       horizon=args.horizon, host=args.host, port=args.port,
+                       refresh_universe=not args.no_refresh_universe, horizon=args.horizon, host=args.host, port=args.port,
                        news_interval=args.news_interval, trade_interval=args.trade_interval,
-                       trader=TraderConfig(starting=args.starting, broker=args.broker))
+                       trader=TraderConfig(starting=args.starting, broker=args.broker, strategy=args.strategy))
     store = Store(args.data_dir, echo=not args.quiet)
     if other := store.running_elsewhere():
         print(f"little-trading: another server (started {other}) is using {store.directory}; stop it first.",
@@ -209,7 +214,7 @@ def _serve(args) -> int:
     httpd = serve(server, args.host, args.port)
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
     server.start()
-    print(f"little-trading dry-run server: http://{args.host}:{args.port}  (data: {store.directory})\n"
+    print(f"little-trading dry-run server: http://{args.host}:{args.port}  (strategy: {args.strategy}, data: {store.directory})\n"
           "It catches up on what it missed before it acts. Ctrl+C stops it; the next start continues from here.",
           flush=True)
     try:

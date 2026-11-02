@@ -1,6 +1,8 @@
 import json
 import threading
 import urllib.request
+from dataclasses import asdict
+from types import SimpleNamespace
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -15,8 +17,9 @@ from little_trading.newsfeed import news_id, parse_feed, query_for
 from little_trading.restricted import RestrictedSymbolError, Restrictions
 from little_trading.server import Server, ServerConfig, market_hours, merge
 from little_trading.store import Store
-from little_trading.training import ModelSet, available_from, lessons_from_training, news_samples, split, train_all
-from little_trading.web import serve
+from little_trading.training import ModelSet, TrainedModel, available_from, lessons_from_training, news_samples, split, train_all
+from little_trading.web import Api, serve
+from little_trading.webpage import PAGE
 from little_trading import universe as U
 
 # --- REQ-000000012: Dry-run server on real prices and news ---
@@ -254,6 +257,59 @@ def test_web_api_and_report(tmp_path):
     assert "## Lessons learned" in report.build(srv.store, SPEC.max_hold)
 
 
+def universe_server(tmp_path, refresh=True):
+    """A server after the close of a Friday. EEE and BBB are stored one session behind, BAD fails to fetch, GGG reports a
+    restricted name, and NEW is a candidate with nothing stored."""
+    bars = {s: daily(seed=i, symbol=s) for i, s in enumerate(("AAA", "SPY", "BBB", "EEE", "BAD", "GGG", "NEW"))}
+    last = bars["AAA"][-1].time
+    fetched = []
+
+    def fetch(url):
+        if "news.google" in url or "feeds.finance" in url:
+            return rss([])
+        sym = url.split("/chart/")[1].split("?")[0]
+        fetched.append(sym)
+        if sym == "BAD":
+            raise OSError("no such page")
+        return chart(bars.get(sym, bars["SPY"]), last - timedelta(hours=1), last + timedelta(hours=5),
+                     name="Volvo Car AB" if sym == "GGG" else "Test Co")
+
+    cfg = ServerConfig(symbols=["AAA"], pool=["BBB", "NEW"], dynamic=1, min_dollar_volume=1000, request_pause=0,
+                       news_backfill_days=7, screener=False, refresh_universe=refresh)
+    store = Store(str(tmp_path / "d"))
+    for sym in ("AAA", "SPY", "BBB", "EEE", "BAD", "GGG"):
+        store.save_bars(sym, bars[sym][:-1])
+        store.set_meta(f"deep_history:{sym}", "10y")
+    srv = Server(cfg, store, fetch, clock=lambda: last + timedelta(hours=7, minutes=30))  # 17:00 in New York
+    srv.ready.set()
+    srv.daily_work = lambda day: f"done {day}"
+    return srv, last.date(), fetched
+
+
+@pytest.mark.requirement("REQ-000000034")
+def test_daily_job_stores_the_session_for_every_stored_company_before_it_retrains(tmp_path):
+    srv, day, fetched = universe_server(tmp_path)
+    seen, retrain = {}, srv.retrain
+
+    def spying():
+        seen.update({s: srv.store.last_day(s) for s in ("EEE", "BBB")})
+        return retrain()
+    srv.retrain = spying
+    assert srv.daily() == f"done {day}"  # BAD failed and GGG was refused, and the job still finished
+    assert seen == {"EEE": day, "BBB": day}
+    assert srv.store.last_day("EEE") == day and srv.store.last_day("NEW") == day
+    assert srv.store.last_day("BAD") < day and srv.store.last_day("GGG") < day  # nothing stored for either
+    assert fetched.count("BBB") == 1  # the ranking does not ask again for a session it already has
+    assert any("beyond the watched ones" in r["message"] for r in srv.store.query("SELECT message FROM events"))
+
+
+@pytest.mark.requirement("REQ-000000034")
+def test_the_daily_refresh_of_the_universe_can_be_switched_off(tmp_path):
+    srv, day, fetched = universe_server(tmp_path, refresh=False)
+    assert srv.daily() == f"done {day}"
+    assert "EEE" not in fetched and srv.store.last_day("EEE") < day
+
+
 @pytest.mark.requirement("REQ-000000015")
 def test_pick_keeps_previous_picks_within_the_keep_rank():
     scored = [{"symbol": s, "score": sc, "reason": ""} for s, sc in
@@ -326,3 +382,510 @@ def test_selection_quality_compares_picks_with_the_rest(store):
     q = evaluation.selection_quality(store, 5)
     assert q["days"] == 5 and q["picked_n"] == 5 and q["left_out_n"] == 5
     assert q["picked_mean"] is not None and q["left_out_mean"] is not None
+
+
+# --- REQ-000000035: The standard system holds the market index ---
+
+USDSEK = 9.84
+SPY_CLOSE = 755.72
+
+
+def spy_bars(store, close=SPY_CLOSE):
+    """The stored market with its last close at `close`, whatever the synthetic series reached."""
+    bars = store.bars("SPY")
+    return [*bars[:-1], Bar(bars[-1].time, close, close, close, close, bars[-1].volume)]
+
+
+def index_trader(store, **kw):
+    return Trader(store, SPEC, TraderConfig(starting=10_000, broker="avanza-mini", strategy="index", **kw), Restrictions())
+
+
+def position(price, opened_day="2025-01-06", qty=1):
+    return {"qty": qty, "avg_price": price, "cost": qty * price * USDSEK, "buy_fee": 1.0, "opened": f"{opened_day}T15:00:00+00:00",
+            "opened_day": opened_day, "entry_score": 0.0}
+
+
+def always(trader, action, score):
+    """Every decision of `trader` gets this action."""
+    real = trader.decide
+
+    def decide(*args):
+        d = real(*args)
+        d["action"], d["score"] = action, score
+        return d
+    trader.decide = decide
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_buys_one_whole_share_and_leaves_the_rest_as_cash_with_fees_charged(store):
+    trader = index_trader(store)
+    market = spy_bars(store)
+    now = market[-1].time
+    summary = trader.round({"AAA": store.bars("AAA")}, market, now, USDSEK)
+    price = SPY_CLOSE * 1.0005
+    pos = trader.portfolio["positions"]["SPY"]
+    trade = store.query("SELECT * FROM trades")
+    assert len(trade) == 1 and trade[0]["side"] == "BUY" and trade[0]["qty"] == 1 and trade[0]["price"] == pytest.approx(price)
+    fees = (max(0.0025 * price, 1.0) * USDSEK) + (price + max(0.0025 * price, 1.0)) * USDSEK * 0.0025
+    assert trade[0]["fee"] == pytest.approx(fees) and fees > 0
+    paid = price * USDSEK + fees
+    assert trader.portfolio["cash"] == pytest.approx(10_000 - paid)
+    assert 2_000 < trader.portfolio["cash"] < 3_000  # about a quarter of the account
+    assert pos["qty"] == 1 and pos["avg_price"] == pytest.approx(price) and pos["cost"] == pytest.approx(paid)
+    assert pos["buy_fee"] == pytest.approx(fees) and pos["opened_day"] == now.date().isoformat()
+    assert summary["outcomes"]["bought"] == 1 and summary["positions"] == ["SPY"] and summary["strategy"] == "index"
+    point = store.query("SELECT * FROM equity")[0]
+    assert point["invested"] == pytest.approx(SPY_CLOSE * USDSEK, abs=0.01)  # at the market, not at the fill
+    assert point["benchmark"] == pytest.approx(10_000 / (1.0025 * 1.0025), rel=1e-6)
+    assert store.get_meta("portfolio")["positions"]["SPY"]["qty"] == 1
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("starting", [7_400, 7_450, 7_476])  # the share alone is 7,440 SEK, with its costs 7,477.25
+def test_index_never_buys_when_a_share_and_its_costs_do_not_fit(store, starting):
+    trader = Trader(store, SPEC, TraderConfig(starting=starting, broker="avanza-mini", strategy="index"), Restrictions())
+    market = spy_bars(store)
+    summary = trader.round({"AAA": store.bars("AAA")}, market, market[-1].time, USDSEK)
+    assert not store.query("SELECT * FROM trades") and trader.portfolio["positions"] == {}
+    assert trader.portfolio["cash"] == starting and summary["outcomes"]["bought"] == 0
+    assert "one more SPY share costs" in summary["index"]
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("starting, qty, cash", [(7_478, 1, 0.75), (20_000, 2, 5_045.50), (100_000, 13, 2_795.76)])
+def test_index_buys_every_whole_share_the_cash_covers_with_its_costs(store, starting, qty, cash):
+    trader = Trader(store, SPEC, TraderConfig(starting=starting, broker="avanza-mini", strategy="index"), Restrictions())
+    market = spy_bars(store)
+    trader.round({"AAA": store.bars("AAA")}, market, market[-1].time, USDSEK)
+    assert store.query("SELECT qty FROM trades")[0]["qty"] == qty
+    assert trader.portfolio["positions"]["SPY"]["qty"] == qty
+    assert trader.portfolio["cash"] == pytest.approx(cash, abs=0.01)
+    assert trader.portfolio["cash"] < 7_477.25  # another share does not fit in what is left
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_adds_to_the_position_when_the_cash_covers_another_share(store):
+    trader = index_trader(store)
+    market = spy_bars(store)
+    now = market[-1].time
+    trader.portfolio["positions"]["SPY"] = position(700.0, qty=1)
+    trader.round({"AAA": store.bars("AAA")}, market, now, USDSEK)  # 10,000 SEK of cash and one share already held
+    price = SPY_CLOSE * 1.0005
+    fill = store.query("SELECT * FROM trades")[0]
+    pos = trader.portfolio["positions"]["SPY"]
+    assert fill["qty"] == 1 and pos["qty"] == 2
+    assert pos["avg_price"] == pytest.approx((700.0 + price) / 2)
+    assert pos["cost"] == pytest.approx(700.0 * USDSEK - fill["amount"])
+    assert pos["buy_fee"] == pytest.approx(1.0 + fill["fee"])
+    assert pos["opened_day"] == "2025-01-06"  # the holding period keeps its start
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("avg_price, opened_day, action, exit_reason", [
+    (SPY_CLOSE * 2, None, "HOLD", "stop loss"),
+    (SPY_CLOSE, "2020-01-06", "HOLD", "max hold"),
+    (SPY_CLOSE, None, "SELL", "SELL score")])
+def test_index_is_not_sold_by_stop_loss_max_hold_or_a_sell_score(store, avg_price, opened_day, action, exit_reason):
+    market = spy_bars(store)
+    now = market[-1].time
+    history = {"SPY": market}
+    held = position(avg_price, opened_day or now.date().isoformat())
+    trader = index_trader(store, confirm_rounds=1)
+    always(trader, action, -0.9 if action == "SELL" else 0.0)
+    trader.portfolio["cash"], trader.portfolio["positions"] = 100.0, {"SPY": dict(held)}
+    trader.round(history, market, now, USDSEK)
+    assert trader.portfolio["positions"]["SPY"]["qty"] == 1 and not store.query("SELECT * FROM trades")
+    d = store.query("SELECT * FROM decisions WHERE symbol = 'SPY'")[0]
+    assert d["action"] == action and d["outcome"] == "held" and "not acted on" in d["detail"]
+    # the same position under the models is sold, so the rule above is what kept it
+    control = Trader(store, SPEC, TraderConfig(broker="avanza-mini", confirm_rounds=1), Restrictions())
+    always(control, action, -0.9 if action == "SELL" else 0.0)
+    control.portfolio["positions"] = {"SPY": dict(held)}
+    control.round(history, market, now + timedelta(minutes=15), USDSEK)
+    assert store.query("SELECT reason FROM trades")[0]["reason"].startswith(exit_reason)
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_records_a_model_buy_and_does_not_act_on_it(store):
+    trader = index_trader(store, confirm_rounds=1)
+    always(trader, "BUY", 0.9)
+    market = spy_bars(store)
+    summary = trader.round({"AAA": store.bars("AAA"), "BBB": store.bars("BBB")}, market, market[-1].time, USDSEK)
+    rows = store.query("SELECT * FROM decisions ORDER BY symbol")
+    assert [(r["symbol"], r["action"], r["outcome"]) for r in rows] == [
+        ("AAA", "BUY", "not_acted"), ("BBB", "BUY", "not_acted"), ("SPY", "BUY", "bought")]
+    assert "index strategy" in rows[0]["detail"] and json.loads(rows[0]["inputs"])["price_features"]
+    assert summary["outcomes"]["not_acted"] == 2
+    assert [t["symbol"] for t in store.query("SELECT symbol FROM trades")] == ["SPY"]
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_sells_another_held_stock_and_buys_with_the_proceeds(store):
+    trader = index_trader(store)
+    history = {"AAA": store.bars("AAA")}
+    quote = history["AAA"][-1].close
+    trader.portfolio["cash"] = 100.0
+    # worth more than one SPY share, so the buy needs the money of the sale
+    qty = int(8_000 / (quote * USDSEK)) + 1
+    trader.portfolio["positions"] = {"AAA": position(quote * 0.5, qty=qty)}
+    market = spy_bars(store)
+    summary = trader.round(history, market, market[-1].time, USDSEK)
+    sell, buy = store.query("SELECT * FROM trades ORDER BY id")
+    assert sell["symbol"] == "AAA" and sell["side"] == "SELL" and sell["qty"] == qty
+    assert sell["reason"].startswith("index strategy") and sell["price"] == pytest.approx(quote * 0.9995)  # not the entry
+    got = trader.broker.sell(qty, quote * 0.9995, USDSEK)["cash"]
+    assert sell["amount"] == pytest.approx(got) and sell["pnl"] == pytest.approx(got - qty * quote * 0.5 * USDSEK)
+    assert buy["symbol"] == "SPY" and buy["side"] == "BUY"
+    assert sorted(trader.portfolio["positions"]) == ["SPY"] and summary["outcomes"]["sold"] == 1
+    d = store.query("SELECT outcome, detail FROM decisions")[0]
+    assert d["outcome"] == "sold" and "index strategy" in d["detail"]
+    assert evaluation.round_trips(store) == []  # AAA's buy came before this ledger started: nothing to pair
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_keeps_a_held_stock_without_a_price_and_logs_it(store):
+    trader = index_trader(store)
+    trader.portfolio["positions"] = {"AAA": position(100.0)}
+    market = spy_bars(store)
+    trader.round({"BBB": store.bars("BBB")}, market, market[-1].time, USDSEK)
+    assert "AAA" in trader.portfolio["positions"]
+    assert not store.query("SELECT * FROM trades WHERE symbol = 'AAA'")
+    assert store.query("SELECT * FROM events WHERE level = 'warning' AND message LIKE 'AAA: no price%'")
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_round_trips_count_additions_at_their_average_price(store):
+    for t in ({"side": "BUY", "qty": 1, "price": 100.0, "ts": "2026-01-05T15:00:00+00:00", "pnl": 0.0},
+              {"side": "BUY", "qty": 3, "price": 200.0, "ts": "2026-01-06T15:00:00+00:00", "pnl": 0.0},
+              {"side": "SELL", "qty": 4, "price": 350.0, "ts": "2026-01-07T15:00:00+00:00", "pnl": 5.0,
+               "reason": "index strategy: test"}):
+        store.add_trade({"symbol": "SPY", "fee": 0.0, "software": "t", "reason": "x", **t})
+    trip = evaluation.round_trips(store)[0]
+    assert trip["qty"] == 4 and trip["entry_price"] == pytest.approx(175.0) and trip["days"] == 2
+    assert trip["return"] == pytest.approx(1.0) and trip["exit_kind"] == "index strategy"
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_buys_nothing_at_an_old_close_and_buys_once_there_is_a_price_of_today(store):
+    trader = index_trader(store)
+    market = spy_bars(store, 600.0)
+    now = market[-1].time + timedelta(days=6)  # the chart's newest bar is six days old
+    summary = trader.round({"AAA": store.bars("AAA")}, market, now, USDSEK)
+    assert not store.query("SELECT * FROM trades") and trader.portfolio["positions"] == {}
+    assert summary["index"] == "no SPY price of today, nothing bought"
+    assert store.query("SELECT * FROM events WHERE level = 'warning' AND message LIKE 'no SPY price of today%'")
+    d = store.query("SELECT outcome, detail FROM decisions WHERE symbol = 'SPY'")[0]
+    assert d["outcome"] == "not_acted" and d["detail"].startswith("no SPY price of today")
+    today = Bar(now, SPY_CLOSE, SPY_CLOSE, SPY_CLOSE, SPY_CLOSE, 1.0)
+    trader.round({"AAA": store.bars("AAA")}, [*market, today], now + timedelta(minutes=15), USDSEK)
+    assert store.query("SELECT price FROM trades")[0]["price"] == pytest.approx(SPY_CLOSE * 1.0005)
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_does_not_add_to_its_position_at_an_old_close(store):
+    trader = index_trader(store)
+    trader.portfolio["positions"] = {"SPY": position(SPY_CLOSE)}
+    market = spy_bars(store)
+    trader.round({"AAA": store.bars("AAA")}, market, market[-1].time + timedelta(days=1), USDSEK)  # 10,000 SEK of cash
+    assert not store.query("SELECT * FROM trades") and trader.portfolio["positions"]["SPY"]["qty"] == 1
+    assert store.query("SELECT outcome FROM decisions WHERE symbol = 'SPY'")[0]["outcome"] == "held"
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_does_not_sell_another_stock_at_an_old_close(store):
+    trader = index_trader(store)
+    trader.portfolio["positions"] = {"AAA": position(100.0)}
+    market = spy_bars(store)
+    trader.round({"AAA": store.bars("AAA")[:-1]}, market, market[-1].time, USDSEK)  # AAA's newest bar is yesterday's
+    assert "AAA" in trader.portfolio["positions"]
+    assert not store.query("SELECT * FROM trades WHERE symbol = 'AAA'")
+    assert store.query("SELECT * FROM events WHERE level = 'warning' AND message LIKE 'AAA: no price of today%'")
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_positions_show_the_market_price_and_the_account_gain(store):
+    trader = index_trader(store)
+    api = Api(SimpleNamespace(store=store))
+    now = spy_bars(store)[-1].time
+
+    def at(close, usdsek, minutes):
+        trader.round({"AAA": store.bars("AAA")}, spy_bars(store, close), now + timedelta(minutes=minutes), usdsek)
+        return api.positions({})[0]
+
+    p = at(SPY_CLOSE, USDSEK, 0)  # the buy round: the market's price, not the fill's
+    assert p["price"] == SPY_CLOSE and p["value"] == pytest.approx(SPY_CLOSE * USDSEK, abs=0.01)
+    assert p["value"] == pytest.approx(store.query("SELECT invested FROM equity")[0]["invested"], abs=0.01)
+    assert p["cost"] == pytest.approx(7_477.25, abs=0.01)
+    assert p["unrealised"] == pytest.approx(-0.0005, abs=1e-4)
+    assert p["gain"] == pytest.approx(-40.97, abs=0.01) and p["gain_share"] == pytest.approx(-0.0055, abs=1e-4)
+    p = at(700.0, 9.50, 15)  # the krona's move is in the account's result, not in the USD change
+    assert p["unrealised"] == pytest.approx(-0.0742, abs=1e-4) and p["gain_share"] == pytest.approx(-0.1106, abs=1e-4)
+    p = at(770.0, 9.40, 30)  # the two even disagree on the sign
+    assert p["unrealised"] > 0 > p["gain_share"]
+    assert "P/L per share (USD)" in PAGE and "money(p.gain)" in PAGE and "pct(p.gain_share)" in PAGE
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("strategy, counted", [("index", {"AAA"}), ("models", {"AAA", "SPY"})])
+def test_live_evaluation_counts_spy_only_when_it_is_a_company_and_not_the_held_index(store, strategy, counted):
+    trader = Trader(store, SPEC, TraderConfig(starting=10_000, broker="avanza-mini", strategy=strategy), Restrictions())
+    aaa, spy = store.bars("AAA"), store.bars("SPY")
+    rounds = range(280, 300)
+    for i in rounds:
+        trader.round({"AAA": aaa[:i + 1], "SPY": spy[:i + 1]}, spy[:i + 1], aaa[i].time, USDSEK)
+    assert {r["symbol"] for r in store.query("SELECT DISTINCT symbol FROM decisions")} == {"AAA", "SPY"}
+    rows = evaluation.matured(store, 5)
+    assert {r["symbol"] for r in rows} == counted
+    assert evaluation.evaluate(store, 5)["matured"] == len(rounds) * len(counted)
+
+
+def index_server(tmp_path, strategy="index", symbols=("AAA",), **kw):
+    """A server in an open market with SPY near its real price, so one share fits the 10,000 SEK account."""
+    scale = SPY_CLOSE / daily(seed=1, symbol="SPY")[-1].close
+    bars = {"AAA": daily(seed=0, symbol="AAA"), "BBB": daily(seed=2, symbol="BBB"),
+            "SPY": [Bar(b.time, b.open * scale, b.high * scale, b.low * scale, b.close * scale, b.volume)
+                    for b in daily(seed=1, symbol="SPY")],
+            "SEK=X": [Bar(b.time, USDSEK, USDSEK, USDSEK, USDSEK, 0) for b in daily(seed=0, symbol="AAA")]}
+    last = bars["AAA"][-1].time
+    clock = {"now": last + timedelta(hours=1)}
+    fetched = []
+
+    def fetch(url):
+        if "news.google" in url or "feeds.finance" in url:
+            fetched.append("news:" + url)
+            return rss([])
+        sym = url.split("/chart/")[1].split("?")[0]
+        fetched.append(sym)
+        return chart(bars[sym], last - timedelta(hours=1), last + timedelta(hours=5))
+
+    cfg = ServerConfig(symbols=list(symbols), pool=["BBB"], dynamic=0, screener=False, request_pause=0, news_backfill_days=7,
+                       trader=TraderConfig(starting=10_000, broker="avanza-mini", strategy=strategy), **kw)
+    make = lambda store: Server(cfg, store, fetch, clock=lambda: clock["now"])  # noqa: E731
+    return make, Store(str(tmp_path / "d")), clock, fetched, last
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_does_nothing_while_the_market_is_closed(tmp_path):
+    make, store, clock, _, last = index_server(tmp_path)
+    srv = make(store)
+    srv.catch_up()
+    clock["now"] = last + timedelta(hours=7)
+    assert srv.trade_round() == "market closed"
+    assert not store.query("SELECT * FROM trades") and srv.trader.portfolio["positions"] == {}
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_server_keeps_the_position_across_a_restart_and_does_not_buy_again(tmp_path):
+    make, store, clock, _, _ = index_server(tmp_path)
+    srv = make(store)
+    srv.catch_up()
+    srv.trade_round()
+    assert srv.trader.portfolio["positions"]["SPY"]["qty"] == 1
+    cash = srv.trader.portfolio["cash"]
+    again = make(store)  # a new process on the same data
+    again.catch_up()
+    clock["now"] += timedelta(minutes=15)
+    assert again.trade_round().startswith("round 2")
+    assert again.trader.portfolio["positions"]["SPY"]["qty"] == 1 and again.trader.portfolio["cash"] == cash
+    assert len(store.query("SELECT * FROM trades")) == 1
+    d = store.query("SELECT outcome, detail FROM decisions WHERE symbol = 'SPY' ORDER BY id DESC")[0]
+    assert d["outcome"] == "held"
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_held_index_is_fetched_once_and_stays_out_of_training_candidates_and_news(tmp_path):
+    make, store, clock, fetched, _ = index_server(tmp_path)
+    srv = make(store)
+    srv.catch_up()
+    srv.trade_round()
+    assert "SPY" in srv.watched()
+    fetched.clear()
+    clock["now"] += timedelta(minutes=15)
+    srv.trade_round()
+    assert fetched.count("SPY") == 1  # market_open's fetch is the round's quote
+    fetched.clear()
+    assert set(srv.refresh_prices(["SPY", "SEK=X", *srv.watched()])) >= {"SPY", "AAA"}
+    assert fetched.count("SPY") == 1
+    assert "SPY" not in srv.training_symbols() and "SPY" not in store.get_meta("known_symbols")
+    assert "SPY" not in srv.candidates()[0]
+    fetched.clear()
+    srv.news_round()
+    srv.backfill_news()
+    assert fetched and not any('SPY' in f for f in fetched)
+    assert not store.query("SELECT * FROM news WHERE symbol = 'SPY'")
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("strategy", ["index", "models"])
+def test_spy_named_as_a_fixed_company_trains_and_collects_news_as_any_other(tmp_path, strategy):
+    make, store, _, _, _ = index_server(tmp_path, strategy=strategy, symbols=("AAA", "SPY"))
+    srv = make(store)
+    assert "SPY" in srv.training_symbols() and "SPY" in store.get_meta("known_symbols")
+    assert "SPY" in srv.news_symbols()
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_server_buys_nothing_when_todays_chart_row_is_empty(tmp_path):
+    make, store, clock, _, last = index_server(tmp_path)
+    srv = make(store)
+    srv.catch_up()
+    real = srv._fetch
+
+    def empty_today(url):
+        payload = json.loads(real(url))
+        quote = payload["chart"]["result"][0]["indicators"]["quote"][0]
+        for k in ("open", "high", "low", "close"):
+            quote[k][-1] = None  # what Yahoo sends for a missing bar: the parser drops it
+        return json.dumps(payload).encode()
+
+    srv._fetch = empty_today
+    assert srv.trade_round().startswith("round 1")
+    assert not store.query("SELECT * FROM trades") and srv.trader.portfolio["positions"] == {}
+    srv._fetch = real
+    clock["now"] += timedelta(minutes=15)
+    assert srv.trade_round().startswith("round 2")
+    close = store.query("SELECT price FROM decisions WHERE symbol = 'SPY' ORDER BY id DESC")[0]["price"]
+    assert store.query("SELECT price FROM trades")[0]["price"] == pytest.approx(close * 1.0005)
+
+
+class Confident:
+    """A model that always says up, so a decision has real votes."""
+
+    def predict(self, x):
+        return 0.9
+
+    def explain(self, x):
+        return [("always", 1.0)]
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_index_server_records_every_models_decision_on_the_watchlist_and_sells_what_it_still_holds(tmp_path):
+    make, store, _, _, _ = index_server(tmp_path)
+    srv = make(store)
+    srv.catch_up()
+    srv.trader.models = ModelSet({"jeff": TrainedModel("jeff", Confident(), 0.05, {"skill": 0.05}, "price",
+                                                       {"train_base_rate": 0.5})}, "t")
+    srv.trader.portfolio["positions"]["BBB"] = position(50.0)
+    store.set_meta("portfolio", srv.trader.portfolio)
+    assert srv.trade_round().startswith("round 1")
+    rows = {r["symbol"]: r for r in store.query("SELECT * FROM decisions")}
+    assert set(rows) == {"AAA", "BBB", "SPY"}
+    aaa = rows["AAA"]
+    assert aaa["action"] == "BUY" and aaa["outcome"] == "not_acted" and aaa["score"] > 0
+    components, inputs = json.loads(aaa["components"]), json.loads(aaa["inputs"])
+    assert components["votes"] == {"jeff": 1.0} and components["weights"] == {"jeff": 0.05}
+    assert components["probabilities"] == {"jeff": 0.9} and inputs["explain"] == {"jeff": [["always", 1.0]]}
+    assert rows["BBB"]["outcome"] == "sold" and rows["SPY"]["outcome"] == "bought"
+    trades = [(t["symbol"], t["side"]) for t in store.query("SELECT * FROM trades ORDER BY id")]
+    assert trades == [("BBB", "SELL"), ("SPY", "BUY")]
+    assert sorted(srv.trader.portfolio["positions"]) == ["SPY"]
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_position_state_announces_only_the_sales_the_index_strategy_will_make(tmp_path):
+    make, store, _, _, last = index_server(tmp_path)
+    srv = make(store)
+    srv.trader.portfolio["positions"] = {"SPY": position(SPY_CLOSE * 2, "2020-01-06"), "AAA": position(100.0)}
+    bars = {s: daily(symbol=s) for s in ("SPY", "AAA")}
+    state = {p["symbol"]: p["note"] for p in srv.position_state(bars)}
+    assert state["SPY"] == "" and state["AAA"] == "not SPY"
+    logged = [r["message"] for r in store.query("SELECT message FROM events WHERE kind = 'catch-up'")]
+    assert not any(m.startswith("SPY") and "will sell" in m for m in logged)
+    assert any(m.startswith("AAA") and "will sell" in m for m in logged)
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_strategy_models_trades_on_the_models_as_before(store):
+    trader = Trader(store, SPEC, TraderConfig(starting=100_000, broker="avanza-mini", strategy="models", confirm_rounds=1),
+                    Restrictions())
+    always(trader, "BUY", 0.9)
+    market = spy_bars(store)
+    summary = trader.round({"AAA": store.bars("AAA")}, market, market[-1].time, USDSEK)
+    assert summary["outcomes"]["bought"] == 1 and sorted(trader.portfolio["positions"]) == ["AAA"]
+    assert TraderConfig().strategy == "models" and "index" not in summary
+    with pytest.raises(ValueError):
+        Trader(store, SPEC, TraderConfig(strategy="momentum"), Restrictions())
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("argv, expected", [([], "index"), (["--strategy", "models"], "models"), (["--strategy", "index"], "index")])
+def test_serve_defaults_to_the_index_strategy_and_passes_it_on(tmp_path, monkeypatch, argv, expected):
+    from little_trading import cli, server as server_module
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    def fake_server(cfg, store):
+        seen["strategy"] = cfg.trader.strategy
+        raise Stop
+    monkeypatch.setattr(server_module, "Server", fake_server)
+    with pytest.raises(Stop):
+        cli.main(["serve", "--dry-run", "--data-dir", str(tmp_path / "d"), *argv])
+    assert seen["strategy"] == expected
+    assert cli.build_parser().parse_args(["serve", "--dry-run"]).strategy == "index"
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_an_interrupted_index_round_leaves_the_portfolio_as_it_was(store):
+    trader = index_trader(store)
+    trader.portfolio["positions"] = {"AAA": position(100.0)}
+    store.set_meta("portfolio", trader.portfolio)
+    before = json.loads(json.dumps(trader.portfolio))
+    market = spy_bars(store)
+
+    def cut_short(*args):
+        raise KeyboardInterrupt
+    store.add_equity = cut_short  # after the sale and the buy, before the round is over
+    with pytest.raises(KeyboardInterrupt):
+        trader.round({"AAA": store.bars("AAA")}, market, market[-1].time, USDSEK)
+    assert trader.portfolio == before and store.get_meta("portfolio") == before
+    assert not store.query("SELECT * FROM trades") and not store.query("SELECT * FROM decisions")
+    assert not store.get_meta("rounds")
+
+
+@pytest.mark.requirement("REQ-000000035")
+def test_the_strategy_is_shown_in_status_boot_record_web_app_and_report(tmp_path):
+    make, store, _, _, _ = index_server(tmp_path)
+    srv = make(store)
+    srv.catch_up()
+    srv.trade_round()
+    assert srv.status()["strategy"] == "index"
+    store.add_boot("test", asdict(srv.config))
+    built = report.build(store, SPEC.max_hold)
+    assert "index: the trader holds SPY" in built  # the `report` command has no status
+    assert "dividends are not credited" in built
+    assert json.loads(store.query("SELECT config FROM boots")[0]["config"])["trader"]["strategy"] == "index"
+    httpd = serve(srv, "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        page = urllib.request.urlopen(base + "/").read().decode()
+        assert 's.strategy === "index" ? "strategy: hold SPY" : "strategy: models"' in page  # the header
+        assert 's.strategy === "index" ? `<div class="card"><h2>Strategy: hold SPY</h2>' in page  # the Overview
+        assert "these decisions are recorded and not acted on" in page
+        assert 's.strategy === "index" ? NOT_ACTED + "With <code>--strategy models</code>: "' in page  # Decisions
+        assert 's.strategy === "index" ? NOT_ACTED : ""' in page  # Models
+        assert "dividends are not credited" in page  # equity and the benchmark are price return
+        assert 'kpi("SPY benchmark"' in page and "SPY held" not in page  # the tile is not what the account holds
+        assert json.loads(urllib.request.urlopen(base + "/api/status").read())["strategy"] == "index"
+        positions = json.loads(urllib.request.urlopen(base + "/api/positions").read())
+        assert [p["symbol"] for p in positions] == ["SPY"] and positions[0]["value"]
+        assert "index: the trader holds SPY" in urllib.request.urlopen(base + "/api/report").read().decode()
+    finally:
+        httpd.shutdown()
+    plain = Store(str(tmp_path / "other"))
+    assert "models: the trader acts" in report.build(plain, SPEC.max_hold)  # no start recorded: as before
+
+
+@pytest.mark.requirement("REQ-000000035")
+@pytest.mark.parametrize("strategy", ["index", "models"])
+def test_each_server_start_names_the_strategy(tmp_path, strategy):
+    make, store, _, _, _ = index_server(tmp_path, strategy=strategy)
+    srv = make(store)
+    srv.loops = []  # the start itself: no loop has to run
+    srv.start()
+    assert srv.shutdown(timeout=5)
+    started = [r["message"] for r in store.query("SELECT message FROM events WHERE kind = 'server'")]
+    assert any(f"strategy {strategy}" in m for m in started)

@@ -5,7 +5,9 @@ the newest session of the snapshot only, from the bars up to that session (`foun
 scores in `shadow_scores` exactly as `shadow-champion` does (model name "kronos", "timesfm" or "chronos"), so `shadow-eval`
 evaluates them once their labels mature when the service id is listed in its "sources". A session already scored is
 skipped; a session the lab missed is a gap and is never back-filled. Every run stores its cost (names, wall and CPU
-seconds, milliseconds per name, model version) in `foundation_runs`.
+seconds, milliseconds per name, model version) in `foundation_runs`, and its coverage (names scored, names with a real bar,
+universe) in `shadow_coverage`, as `shadow-champion` does. Names are the same mask as the champion's (`forward_log.scorable`),
+narrowed only by the history the model needs (`min_history`).
 
 Forward only (tier T3). These models were pre-trained on public series that overlap every year we could test on, so no
 historical evaluation counts: there is no config switch that scores past sessions into the shadow log, and a config that
@@ -23,7 +25,7 @@ from datetime import date
 
 import numpy as np
 
-from little_trading.lab import compare, foundation
+from little_trading.lab import compare, forward_log, foundation
 from little_trading.lab.panel import Panel
 from little_trading.lab.service.context import Skip
 
@@ -106,11 +108,13 @@ def run(ctx, maker=None) -> None:
     db.execute("INSERT INTO foundation_runs VALUES (?,?,?,?,?,?,?,?,?,?)",
                (asof, model, "forward", n, round(cost["seconds"], 3), round(cost["cpu_seconds"], 3), round(cost["ms_per_name"], 3),
                 _version(fc), ctx.snapshot_dir.name, ctx.run_id))
+    cover = forward_log.record_coverage(db, asof, model, n, panel, last, ctx.snapshot_dir.name, ctx.run_id)
     db.commit()
-    ctx.log(f"{asof} {model}: {n} scores in {cost['seconds']:.1f}s ({cost['ms_per_name']:.1f} ms per name, "
-            f"{cost['cpu_seconds']:.1f} CPU s)")
+    ctx.log(f"{asof} {model}: {n} scores of {cover['universe']} names ({cover['bars']} with a bar) in {cost['seconds']:.1f}s "
+            f"({cost['ms_per_name']:.1f} ms per name, {cost['cpu_seconds']:.1f} CPU s)")
     # the variant enters the trial ledger once, on its first forward session; later sessions test nothing new
-    ctx.result(metrics={"asof": asof, "model": model, "names": n, "seconds": round(cost["seconds"], 3),
+    ctx.result(metrics={"asof": asof, "model": model, "names": n, "bars": cover["bars"], "universe": cover["universe"],
+                        "seconds": round(cost["seconds"], 3),
                         "cpu_seconds": round(cost["cpu_seconds"], 3), "ms_per_name": round(cost["ms_per_name"], 3)},
                variants=VARIANTS if first else 0, message=f"scored {asof} with {model}", data_hash=manifest.get("hash"))
 

@@ -23,14 +23,20 @@ python3 -m little_trading run --starting 10000 --taxed 30 --duration 90 --dry-ru
 little-trading serve --dry-run                      # 20 fixed + 30 daily-picked companies, every 15 minutes
                                                     # http://127.0.0.1:8765, data in ~/.local/share/little-trading
 little-trading serve --dry-run AAPL KO --dynamic 10 # your own fixed list and fewer picks
+little-trading serve --dry-run --strategy models    # trade on the models instead of holding SPY
 little-trading serve --dry-run --start-fresh        # archive the previous dry run and start a new one
 little-trading report --days 7 > report.md
 ```
 
-It keeps trading the watchlist with fake money on real prices and news, acting only on signals that have shown
-skill on recent data and only after they repeat for three rounds (it waits otherwise), retrains its models after every close,
-and shows everything in the web app: performance against buy and hold, every decision and why, news, models,
-lessons and logs. `--dry-run` is required: real trading is not implemented, and `serve` without it refuses.
+By default (`--strategy index`) it holds SPY with fake money on real prices: whole shares with the cash that covers
+them and their costs (on 10,000 SEK that is one share, about a quarter stays cash), no stop loss, maximum hold or
+score-based sale, and anything else it still holds is sold. The models keep deciding on the watchlist, every decision
+is recorded and none is acted on. With `--strategy models` it trades the watchlist instead, acting only on signals
+that have shown skill on recent data and only after they repeat for three rounds (it waits otherwise).
+
+Either way it retrains its models after every close and shows everything in the web app: performance against buy and
+hold, every decision and why, news, models, lessons and logs. `--dry-run` is required: real trading is not
+implemented, and `serve` without it refuses.
 Stop it with Ctrl+C and start it again whenever you like: it continues from where it stopped, catches up on
 the prices, news and daily jobs it missed, and only acts once caught up. The "Report for Claude" tab (or `report`) summarises it for improving the software.
 

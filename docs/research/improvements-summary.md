@@ -1,24 +1,35 @@
 # Step G: the gate (improvement lab summary)
 
-**Nothing has passed. Nothing is recommended for the live system.** As of 2026-10-30 no idea of the improvement lab has
-reached T1, because no idea has run on real data: every service was built and tested in a sandbox that holds neither the
-user's data directory, the lab snapshot nor the bake-off `lab.db`. Passing T0 (the unit tests: no look-ahead, a planted edge
-found, noise not found) proves that the code does not cheat; it says nothing about whether an idea works. The scorecard of
-plan section 8 ranks variants that passed T1 and T2; there are none to rank, so this file ranks nothing and proposes no
-change. "None of them" stays an allowed outcome.
+**Nothing has passed. Nothing is recommended for the live system.** As of 2026-11-02 the development runs of steps B, T and I
+are finished on real data, and no variant passes T1. "None of them" stays an allowed outcome, and the selection window and the
+holdout stay unread by these families: no family earned its look. The figures are in `improvements-decision.md`,
+`improvements-training.md` and `improvements-information.md`, written from the services' tables.
+
+The standard system changed on 2026-11-02, by the user's decision and not because of a lab result: `serve` now holds SPY
+instead of staying in cash (REQ-000000035, `--strategy models` is the way back). No lab variant won, so nothing moved from the
+lab to standard. A lab strategy must now beat holding SPY, which is the bar equal weight and SPY set all along.
 
 ## Where each step stands
 
-| Step | Status | Tier reached | Why it stops there |
+| Step | Status | Tier reached | What it found, or why it stops |
 |---|---|---|---|
-| S1 `shadow-eval` | Built, T0 tests pass | none (forward evidence starts on the user's machine) | Not deployed; T3 needs 60 matured sessions after it starts |
-| K1 (earlier) | Run on the real snapshot (see `k1-edge-needed.md`) | calibration, not a candidate | Done: a top-10 layer needs rank IC 0.15 to 0.30 net |
-| X1 `x1-qlib-check`, `x1-qlib-native` | Built, T0 tests pass; the Qlib path ran on synthetic data in a Python 3.12 venv | none | Not run on the snapshot |
-| R1 notes | 11 code and model notes read from source files; 11 paper notes say the paper was **not reached** | n/a | No little-library tools and no network to paper hosts in the sandbox |
-| B (H-D1 to H-D5, O1, O2) | 7 services, cards, T0 tests pass | T0 | T1 on development is the user's run |
-| T (H-T1 to H-T6, O3, O4, O5) | 8 services plus the O5 checks, cards, T0 tests pass | T0 | T1 is the user's run; the trees, torch and Optuna paths never executed here |
-| I (H-I1 to H-I3) | 3 services, the EDGAR client, cards, T0 tests on fixtures | T0 | Needs the EDGAR contact (decision D1) and the user's run |
-| F (H-F1 Kronos, TimesFM, Chronos) | 3 forward scorers, cards, T0 tests with a fake forecaster | T0 | Forward only: T3 needs 60 sessions; no historical test counts |
+| S1 `shadow-eval` | Running on its schedule | T3 started | A session counts only at 80 % coverage. The refresh that makes that reachable (REQ-000000034) is on the branch and needs a deploy |
+| K1 | Run on the real snapshot (`k1-edge-needed.md`) | calibration | A top-10 layer needs rank IC 0.15 to 0.30 net |
+| X1 | Ran on real data on real Qlib 0.9.7, three configurations | rule 5 met for the trees | Same settings on both sides agree (below). Qlib's published settings do not suit our data |
+| R1 notes | 11 paper notes from the papers, each checked by an independent reader | n/a | 9 full text; `ty80` and `zpqu` abstract only, verdict open. None moves K1 |
+| B (H-D1 to H-D5, O1, O2) | 7 services, 38 variants, run | T1 | 0 pass. No variant beats equal weight on both periods. H-D2, H-D4 and O2 almost never traded |
+| T (H-T1 to H-T6, O3, O4) | 8 services, 22 variants, run | T1 | 0 pass. Best IC +0.0103 (t of the difference +0.49) |
+| I (H-I1 to H-I3) | 3 studies, run | study | Nothing found, but H-I1 and H-I2 carry two data faults, so not a verdict |
+| S1 strategies (`s1-strategies`) | 6 variants, built, card committed, tests pass | T0 | Needs a deploy. The one test of value and news with the faults fixed |
+| F (H-F1) | TimesFM and Chronos started on 2026-11-02; Kronos not started | T3 started | Forward only: 60 sessions at least. Kronos waits on the user, because the permission check blocks the external clone |
+
+## X1 and rule 5
+
+`x1-same-params` (`docs/lab/cards/x1-same-params.md`) fitted our trees and Qlib 0.9.7's `LGBModel` with the same settings on the
+same rows, and passed under both labels: score correlation 0.79 and 0.76, IC gap t +0.84 and -0.35. So the tree harness agrees
+with a second implementation. It says nothing about which settings earn money, and both ICs stay near zero. The first X1, with
+Qlib's published settings, failed the same way on the fallback and on real Qlib, because one side stayed flat at our row count.
+That stands as a finding about those settings. The card was written after that failure, so it counts as a second try.
 
 ## What to expect, honestly
 
@@ -36,20 +47,18 @@ best real model in the bake-off reached 0.034. So:
 - **Foundation models (F)** can only be judged forward; a year of shadow scoring detects an IC of about 0.02 (plan section
   2), so they cannot be promoted soon whatever they show.
 
-## The order of the user's runs (see `docs/lab/run-on-your-machine.md`)
+## What comes next
 
-1. Deploy, restart the lab, seed the ledger, create `shadow-eval` (forward evidence accumulates only with time).
-2. X1 before anything is credited (plan rule 5).
-3. Development T1 runs, cheapest first: B (seven services), then T (`h-t5-recency`, `h-t2-labels`, `o4-seed-bagging`,
-   `h-t1-alpha158`, `h-t6-tuning`, `h-t4-ensemble`, `h-t3-ranking-loss`, `o3-policy`), then I once the contact is set.
-4. **Gate:** only a family with a T1 pass gets its one look at the selection window (2024-01 to 2025-06), run by the user
-   with `"window": "selection"` and a purpose in the config; the lab records the look and refuses a second.
-5. **Gate:** the holdout (2025-07-01 on) is read once, through `HoldoutGuard`, only when exactly one finalist exists and the
+1. **Gate:** a deploy brings the fixes, the daily refresh and `s1-strategies` to the lab. It restarts the live paper server.
+2. Run `s1-strategies` on development.
+3. **Gate:** only a family with a T1 pass gets its one look at the selection window (2024-01 to 2025-06), with the user's
+   go-ahead; the lab records the look and refuses a second.
+4. **Gate:** the holdout (2025-07-01 on) is read once, through `HoldoutGuard`, only when exactly one finalist exists and the
    user approves.
-6. **Gate:** a finalist reaches the live system only as a source change behind a switch that is off by default, after T3
+5. **Gate:** a finalist reaches the live system only as a source change behind a switch that is off by default, after T3
    shadow and the user's approval.
 
 ## Trial count
 
-The cards of this branch pre-register 71 variants (B 38, T 22, I 5, F 3, X1 2, O5 1). With the about 190 bake-off runs
-seeded into the ledger, any deflated Sharpe or PBO computed after these runs uses at least 261 trials.
+The lab's ledger holds 261 variants on 2026-11-02, the bake-off's included. `s1-strategies` adds 6. Any deflated Sharpe or PBO
+computed later uses the full count at that time.

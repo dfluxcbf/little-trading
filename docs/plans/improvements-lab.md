@@ -148,7 +148,12 @@ check and the read-only Lab tab. The lab runs from the deployed install, not fro
 are the evening of 2026-10-29. S0 (REQ-000000024) adds the seeded ledger, the card template and check, the
 future-perturbation helper and the scratch copy; after it is deployed, run `little-trading lab ledger seed` once.
 
-**Status (2026-10-30, built in a sandbox, not deployed, no real-data run):** S1 `shadow-eval` (REQ-000000027) is built and
+**Status (2026-11-02):** S1, X1, R1, B, T and I have run on real data, development only, and nothing passes T1; X1 meets rule 5
+with the same settings on both sides. F runs forward for TimesFM and Chronos; Kronos has not started. `s1-strategies`
+(`docs/plans/strategies.md`) and the daily refresh (REQ-000000034) are built and wait for a deploy. See
+`docs/research/improvements-summary.md`.
+
+**Earlier status (2026-10-30, built in a sandbox, not deployed, no real-data run):** S1 `shadow-eval` (REQ-000000027) is built and
 tested on synthetic data; it starts producing rows five sessions after it is created on the user's machine. The commands for
 the user's machine, in order, are in `docs/lab/run-on-your-machine.md`; the requirement ids written in this branch, which
 little-workshop has not registered yet, are in `docs/lab/requirements-pending.md`. The same holds for X1 (REQ-000000028), R1 (notes in

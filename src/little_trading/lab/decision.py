@@ -77,6 +77,8 @@ class Ctx:
     sig: np.ndarray
     c: np.ndarray
     resid_q: np.ndarray  # (T,) 80% quantile of past absolute errors of mu against the realised 5-session return
+    equity: float | None = None  # the account at the close of the session being decided; `backtest_weights` sets it
+    held: np.ndarray | None = None  # (N,) shares held at that close, also for a name with no close that session
 
 
 def conformal_band(panel: Panel, mu: np.ndarray, q: float = 0.8, window: int = 250) -> np.ndarray:
@@ -183,10 +185,17 @@ def d7(k=10, keep_rank=30):
 def backtest_weights(panel: Panel, layer, ctx: Ctx, start: int, end: int, broker="avanza-mini", cash: float = 10_000.0,
                      rebalance_every: int = 21, slippage: float = 0.0005, band: float = 0.03) -> Result:
     """Runs sessions [start, end]. After the close of every `rebalance_every`-th session the layer proposes weights;
-    at the next open a name is traded only if its weight is off target by more than `band` of the equity."""
+    at the next open a name is traded only if its weight is off target by more than `band` of the equity. A name with no
+    close that session is valued at its last close, however long ago that was.
+
+    A layer marked `never_resize` decides on whole names: a kept name is left alone at the open even after a gap past the
+    band, and a name it let go is sold at any open it has, also below the volume gate, because the layer has already spent
+    that money on its replacement."""
     broker = B.get(broker) if isinstance(broker, str) else broker
     N = panel.close.shape[1]
     qty, basis = np.zeros(N, int), np.zeros(N)
+    last_px = np.full(N, np.nan)  # each name's last close, row by row
+    never_resize = getattr(layer, "never_resize", False)
     equity, trades, traded, fees = [], [], 0.0, 0.0
     pending = None
     for t in range(start, end + 1):
@@ -194,11 +203,15 @@ def backtest_weights(panel: Panel, layer, ctx: Ctx, start: int, end: int, broker
         if pending is not None:
             target, pending = pending, None
             px_open = panel.open[t]
-            held_v = float(np.nansum(qty * np.where(np.isnan(px_open), panel.close[t - 1], px_open)) * fx)
+            held_v = float(np.nansum(qty * np.where(np.isnan(px_open), last_px, px_open)) * fx)
             total = cash + held_v
             tradable = panel.tradable[t - 1] & ~np.isnan(px_open)
+            if never_resize:
+                tradable = tradable | ((target == 0) & (qty > 0) & ~np.isnan(px_open))
             cur_w = qty * np.where(np.isnan(px_open), 0.0, px_open) * fx / total
             diff = np.where(tradable, target - cur_w, 0.0)
+            if never_resize:  # an overnight gap must not turn a kept name into a trade
+                diff = np.where((qty > 0) & (target > 0), 0.0, diff)
             for c in [int(i) for i in np.argsort(diff)]:  # sells first
                 if diff[c] >= -band and not (target[c] == 0 and qty[c] > 0 and tradable[c]):
                     continue
@@ -233,10 +246,11 @@ def backtest_weights(panel: Panel, layer, ctx: Ctx, start: int, end: int, broker
                 basis[c] += f["cash"]
                 trades.append({"ts": str(panel.dates[t]), "symbol": panel.symbols[c], "side": "BUY", "qty": q,
                                "price": price, "fx": fx, "fee": f["fee"], "pnl": 0.0})
-        px = np.where(np.isnan(panel.close[t]), panel.close[max(t - 1, 0)], panel.close[t])
-        equity.append(cash + float(np.nansum(qty * px) * fx))
+        last_px = np.where(np.isnan(panel.close[t]), last_px, panel.close[t])
+        equity.append(cash + float(np.nansum(qty * last_px) * fx))
         if (t - start) % rebalance_every == 0 and t < end:
-            cur = qty * np.where(np.isnan(panel.close[t]), 0.0, panel.close[t]) * fx / equity[-1]
+            cur = qty * np.nan_to_num(last_px) * fx / equity[-1]
+            ctx.equity, ctx.held = equity[-1], qty.copy()
             pending = np.clip(layer(ctx, t, cur), 0, None)
     eq = np.array(equity)
     res = Result(panel.dates[start:end + 1], eq, trades, fees, traded / float(eq.mean()) if len(eq) else 0.0)
