@@ -190,10 +190,12 @@ class Panel:
         if key not in self._fwd:
             T, N = self.close.shape
             out = np.full((T, N), np.nan)
-            out[: T - h] = self.close[h:] / self.open[1: T - h + 1] - 1.0
+            if T > h:  # a panel no longer than the horizon has no label on any row
+                out[: T - h] = self.close[h:] / self.open[1: T - h + 1] - 1.0
             if relative:
                 m = np.full(T, np.nan)
-                m[: T - h] = self.market_close[h:] / self.market_open[1: T - h + 1] - 1.0
+                if T > h:
+                    m[: T - h] = self.market_close[h:] / self.market_open[1: T - h + 1] - 1.0
                 out = out - m[:, None]
             self._fwd[key] = np.where(np.isinf(out), np.nan, out)
         return self._fwd[key]

@@ -97,7 +97,8 @@ touch the live server. The lab manages **services**, one per alternative or impr
   interpreter). `h-i1`, `h-i2` and `h-i3` are studies; the EDGAR client (`lab/edgar.py`) takes its contact only from the
   lab's local config, stays under 10 requests per second and drops restricted issuers before any request. `h-f1-kronos`,
   `h-f1-timesfm` and `h-f1-chronos` are forward-only scorers that write `shadow_scores`, which `shadow-eval` evaluates; no
-  historical test of a foundation model counts.
+  historical test of a foundation model counts. `s3-news-shadow` (REQ-000000036) scores S3-NEWS forward with no order placed and
+  keeps its own paper book against whole-share SPY and noise, replayed on bars kept as first seen; it is not a `shadow-eval` source.
 - First services: `snapshot` and `shadow-champion` (forward scores of the control models, the yardstick for every other
   scorer). The bake-off harness (`python -m little_trading.lab`) is unchanged.
 

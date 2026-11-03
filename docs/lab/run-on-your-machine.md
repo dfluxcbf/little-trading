@@ -75,6 +75,31 @@ Each builds its own pinned environment (torch and the model package) at creation
 Face on the first run. A scorer does not start on its schedule by creation alone: `service start` switches it on and runs it
 once, and from then on it scores daily. `shadow-eval` already lists them as sources.
 
+## 3a. S3-NEWS in shadow (REQ-000000036): forward only, no order placed
+
+The card is `docs/lab/cards/s3-news-shadow.md`. It needs a deploy that contains it and the `edgar_contact` already in the lab's local
+config (step 6). The first review is on the clock of the development span, about 2026-11-23 on the calendar of the 2026-10-30 snapshot. If
+the service is not scoring by that session, the book starts on the next one, about 63 sessions later.
+
+```bash
+little-trading lab service create s3-news-shadow --catalog
+```
+
+```bash
+little-trading lab service start s3-news-shadow
+```
+
+The first run makes about 5,700 requests to EDGAR at 5 a second, about 19 minutes; a usual day about 230, under a minute of requests. It
+runs on weekdays 180 minutes after the US close. Read it with:
+
+```bash
+cat ~/.local/share/little-trading/lab/service/services/s3-news-shadow/report.md
+```
+
+The report says which reading applies: no book yet, progress, or verdict. A verdict needs 252 counted sessions, about a year, and is read
+once. Do not add it to the sources of `shadow-eval`: it scores only about 60 % of the names, and that would shrink every other
+model's comparison.
+
 ## 4. X1 cross-check (REQ-000000028), before any idea is credited
 
 ```bash

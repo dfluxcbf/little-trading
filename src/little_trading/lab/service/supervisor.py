@@ -33,6 +33,7 @@ KINDS = ("job", "experiment", "scorer", "study")
 ID = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 ENTRY_PREFIX = "little_trading.lab.services."
 TERM_GRACE = 10.0
+SNAPSHOT_SERVICE = "snapshot"
 
 
 class LabError(Exception):
@@ -179,13 +180,12 @@ class Supervisor:
             sched = s["schedule"]
             if not s["enabled"] or sched.get("kind", "none") == "none" or self._running_run(s["id"]):
                 continue
-            since = datetime.fromisoformat(s["scheduled_since"]) if s.get("scheduled_since") else None
-            last = self.reg.runs(s["id"], 1)
-            last_start = datetime.fromisoformat(last[0]["started_at"]) if last else None
-            decision = schedule.decide(sched, now, since, s.get("last_slot"), last_start)
+            decision = self._due(s, now)
             if decision is None:
                 continue
             kind, key = decision
+            if kind == "run" and s["kind"] == "scorer" and self._snapshot_pending(now):
+                continue  # it would read yesterday's snapshot and spend its slot: the slot stays open for a later tick
             if kind == "gap":
                 self.reg.add_gap(s["id"], key, "the slot passed before the lab could run it; never back-filled")
                 self.reg.update_service(s["id"], last_slot=key)
@@ -200,6 +200,24 @@ class Supervisor:
                 self.reg.add_gap(s["id"], key, f"could not start: {type(exc).__name__}: {exc}")
                 self.reg.update_service(s["id"], last_slot=key)
                 self.reg.event("error", f"could not start: {type(exc).__name__}: {exc}", s["id"])
+
+    def _due(self, s: dict, now: datetime):
+        since = datetime.fromisoformat(s["scheduled_since"]) if s.get("scheduled_since") else None
+        last = self.reg.runs(s["id"], 1)
+        last_start = datetime.fromisoformat(last[0]["started_at"]) if last else None
+        return schedule.decide(s["schedule"], now, since, s.get("last_slot"), last_start)
+
+    def _snapshot_pending(self, now: datetime) -> bool:
+        """True while the snapshot service is running or due to run: after a restart inside the grace period its slot and a scorer's
+        can both be open on one tick, and a scorer reads `CURRENT` as it starts. Not on an `every` schedule, which has no slot of the
+        evening to wait for and no grace, so that wait need not end and each scorer would lose every slot."""
+        snap = self.reg.service(SNAPSHOT_SERVICE)
+        if not snap or not snap["enabled"] or snap["schedule"].get("kind") == "every":
+            return False
+        if self._running_run(SNAPSHOT_SERVICE):
+            return True
+        due = self._due(snap, now)
+        return due is not None and due[0] == "run"
 
     def _running_run(self, service_id: str) -> str | None:
         with self.lock:

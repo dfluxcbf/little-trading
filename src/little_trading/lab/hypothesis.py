@@ -109,7 +109,7 @@ def exit_cost(panel: Panel, trades: list[dict], end: int, broker="avanza-mini", 
     broker = decision.B.get(broker) if isinstance(broker, str) else broker
     left: dict[str, int] = {}
     for tr in trades:
-        left[tr["symbol"]] = left.get(tr["symbol"], 0) + (tr["qty"] if tr["side"] == "BUY" else -tr["qty"])
+        left[tr["symbol"]] = left.get(tr["symbol"], 0) + (-tr["qty"] if tr["side"] == "SELL" else tr["qty"])  # a SPLIT row holds the change
     col = {s: i for i, s in enumerate(panel.symbols)}
     fx, cost = float(panel.usdsek[end]), 0.0
     for sym, q in left.items():

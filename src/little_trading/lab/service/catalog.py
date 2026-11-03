@@ -523,4 +523,16 @@ def lab_phases(trees: dict) -> dict[str, dict]:
         "schedule": {"kind": "none"},
         "resources": {"threads": 4, "memory_mb": 4096, "timeout_s": 21600},
     }
+    out["s3-news-shadow"] = {
+        "title": "S3-NEWS scored forward without trading on it: its paper book against whole-share SPY and noise",
+        "hypothesis": "S3-NEWS forward (docs/lab/cards/s3-news-shadow.md): the reaction to earnings news keeps beating whole-share SPY "
+                      "on sessions nobody has seen (prior: low; already counted on the s1-strategies card, T3 only)",
+        "kind": "scorer",
+        "entry": "little_trading.lab.services.s3_news_shadow",
+        "config": {"rate": 5, "submissions_max_age_hours": 12, "facts_max_age_hours": 168, "noise_runs": 200},
+        "env": "nn",
+        "schedule": {"kind": "daily_after_close", "minutes": 180},
+        # about 230 requests on a usual day; the first run asks for about 5,700 (19 minutes at 5 a second); see the service
+        "resources": {"threads": 1, "memory_mb": 1536, "timeout_s": 3600},
+    }
     return out

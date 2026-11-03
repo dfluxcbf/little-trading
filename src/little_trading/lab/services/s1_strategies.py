@@ -69,20 +69,23 @@ def without(panel: Panel, names: list[str]) -> Panel:
                              panel.market_open, usdsek=panel.usdsek)
 
 
-def collect(ctx, cfg: dict, panel: Panel, client: edgar.Client, last: date) -> tuple[dict, list[dict], list[tuple], set]:
-    """Per allowed company: its facts as filed by `last`, and its earnings events between the panel's start and `last` with
-    each press release's lexicon tone. No exhibit filed after `last` is fetched. Facts and filings are fetched apart, so one
-    failing does not lose the other. The fifth item of a log row says what went wrong; `failed` holds the companies with a
-    fetch failure that could pass, which stops the run. Asking stops after `MAX_FAILS_IN_A_ROW` such failures in a row."""
-    first = panel.dates[0]
+def collect(ctx, cfg: dict, panel: Panel, client: edgar.Client, last: date, since: date | None = None) -> tuple[dict, list[dict], list[tuple], set]:
+    """Per allowed company: its facts as filed by `last`, and its earnings events between `since` (the panel's start by default)
+    and `last` with each press release's lexicon tone. No exhibit filed after `last` is fetched. Facts and filings are fetched
+    apart, so one failing does not lose the other. The fifth item of a log row says what went wrong; `failed` holds the companies
+    with a fetch failure that could pass, which stops the run. Asking stops after `MAX_FAILS_IN_A_ROW` such failures in a row; a read
+    from the cache says nothing about SEC, so only an answer that came over the transport breaks the row."""
+    first = since or panel.dates[0]
     facts_by, events, log, ciks, failed = {}, [], [], set(), set()
     subs_age = float(cfg["submissions_max_age_hours"]) * 3600
     facts_age = float(cfg["facts_max_age_hours"]) * 3600
     in_a_row = 0
 
     def fetch(sym: str, what: str, call, notes: list[str]):
-        """`call()`, or None with a note. A document that does not exist or does not parse is not a failure of the fetch."""
+        """`call()`, or None with a note. A document that does not exist, or whose shape cannot be read, is not a failure of the fetch.
+        A body that is not the document at all (`edgar.BadBody`, an error page with a 200) is one."""
         nonlocal in_a_row
+        answered = len(client.fetched)
         try:
             out = call()
         except restricted.RestrictedSymbolError:
@@ -96,13 +99,14 @@ def collect(ctx, cfg: dict, panel: Panel, client: edgar.Client, last: date) -> t
         except (ValueError, KeyError) as exc:
             notes.append(f"{what} unreadable: {type(exc).__name__}")
         else:
-            in_a_row = 0
+            if len(client.fetched) > answered:
+                in_a_row = 0
             return out
         return None
 
     for sym in panel.symbols:
         if in_a_row >= MAX_FAILS_IN_A_ROW:
-            ctx.log(f"{SERVICE_ID}: {in_a_row} failed fetches in a row, not asking for {sym} or the names after it")
+            ctx.log(f"{ctx.service_id}: {in_a_row} failed fetches in a row, not asking for {sym} or the names after it")
             failed.add(sym)
             log.append((sym, client.cik_for(sym), 0, 0, "not asked: too many failed fetches in a row"))
             continue

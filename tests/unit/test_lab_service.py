@@ -201,6 +201,9 @@ def run(ctx):
         raise RuntimeError("boom")
     elif mode == "skip":
         raise Skip("nothing new")
+    elif mode == "nap":
+        time.sleep(1.5)
+        ctx.result(metrics={"x": 1}, variants=0, message="done", data_hash="abc")
     elif mode == "sleep":
         time.sleep(60)
     elif mode == "mem":
@@ -357,6 +360,39 @@ def test_a_missed_daily_slot_is_a_gap_and_the_next_slot_runs(lab):
     now[0] = datetime(2026, 10, 29, 21, 45, tzinfo=UTC)  # 15 minutes after the next slot
     row = wait_run(sup, "daily")
     assert row["trigger"] == "schedule" and row["slot"] == "2026-10-29T21:30:00+00:00"
+
+
+@pytest.mark.requirement("REQ-000000036")
+def test_a_scorer_waits_for_the_snapshot_of_its_own_evening_after_a_restart(lab):
+    now = [datetime(2026, 11, 3, 20, 0, tzinfo=UTC)]  # before either slot of the day
+    sup = lab(clock=lambda: now[0])
+    create(sup, "snapshot", "nap", config={"variants": 0})
+    create(sup, "scorer-one", "ok", kind="scorer", config={"variants": 0})
+    create(sup, "other-job", "ok", config={"variants": 0})
+    since = "2026-11-03T12:00:00+00:00"
+    sup.reg.update_service("snapshot", enabled=1, scheduled_since=since, schedule={"kind": "daily_after_close", "minutes": 60})
+    sup.reg.update_service("scorer-one", enabled=1, scheduled_since=since, schedule={"kind": "daily_after_close", "minutes": 180})
+    sup.reg.update_service("other-job", enabled=1, scheduled_since=since, schedule={"kind": "daily_after_close", "minutes": 180})
+    time.sleep(0.3)
+    now[0] = datetime(2026, 11, 4, 1, 0, tzinfo=UTC)  # 20:00 New York, two slots of today open on one tick and none handled
+    snap, scorer = wait_run(sup, "snapshot"), wait_run(sup, "scorer-one")
+    assert snap["state"] == scorer["state"] == "succeeded"
+    assert scorer["started_at"] >= snap["finished_at"]  # it read the snapshot of this evening
+    assert scorer["slot"] == "2026-11-04T00:00:00+00:00" == sup.reg.service("scorer-one")["last_slot"]  # and its slot was not lost
+    assert not sup.handle("gaps.list", {"id": "scorer-one"})["gaps"]
+    assert wait_run(sup, "other-job")["state"] == "succeeded"  # a service that is not a scorer does not wait
+
+
+@pytest.mark.requirement("REQ-000000036")
+def test_a_scorer_does_not_wait_for_a_snapshot_service_that_is_off(lab):
+    now = [datetime(2026, 11, 3, 20, 0, tzinfo=UTC)]
+    sup = lab(clock=lambda: now[0])
+    create(sup, "snapshot", "ok", config={"variants": 0})
+    create(sup, "scorer-one", "ok", kind="scorer", config={"variants": 0})
+    sup.reg.update_service("snapshot", enabled=0, scheduled_since="2026-11-03T12:00:00+00:00", schedule={"kind": "daily_after_close", "minutes": 60})
+    sup.reg.update_service("scorer-one", enabled=1, scheduled_since="2026-11-03T12:00:00+00:00", schedule={"kind": "daily_after_close", "minutes": 180})
+    now[0] = datetime(2026, 11, 4, 1, 0, tzinfo=UTC)
+    assert wait_run(sup, "scorer-one")["state"] == "succeeded" and not sup.reg.runs("snapshot", 5)
 
 
 @pytest.mark.requirement(REQ)

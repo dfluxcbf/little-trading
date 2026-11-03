@@ -15,6 +15,9 @@ per second. So the client:
 - takes its transport (a function url -> bytes) from the caller, so tests run without a network; the default one is urllib.
 - tries a failed request up to `RETRIES` more times with a growing pause, each try through the rate limit. A document SEC
   says does not exist (`NotFound`) is not retried. A failure is never cached, so a later run asks again.
+- treats a 200 answer that is not the document asked for as a failed request (`BadBody`): a JSON endpoint whose body does not
+  parse or lacks the key every such document has, a filing index with no table, or a filing document that is empty or reads as
+  an error page. Such a body is never cached, and one already in the cache is asked for again.
 
 Endpoints: the ticker map (www.sec.gov/files/company_tickers.json), submissions (data.sec.gov/submissions/CIK##########.json),
 filing indexes and documents (www.sec.gov/Archives/edgar/data/...), and XBRL companyfacts
@@ -47,6 +50,10 @@ DEFAULT_RATE = 5.0
 HOSTS = ("www.sec.gov", "data.sec.gov")
 RETRIES = 2
 BACKOFF_S = 1.0
+MIN_DOCUMENT_BYTES = 200  # the smallest of 4,760 real cached press releases has 1,044 bytes
+ERROR_PAGE_BYTES = 16_384  # an error page is short; a long document that quotes these words is a document
+ERROR_PAGE = re.compile(rb"service unavailable|temporarily unavailable|try again later|request rate threshold|undeclared automated tool"
+                        rb"|too many requests|access denied|bad gateway|gateway time-?out|internal server error", re.I)
 
 
 class ContactMissing(RuntimeError):
@@ -57,7 +64,16 @@ class NotFound(OSError):
     """SEC has no such document (HTTP 404 or 410): asking again cannot help, and it says nothing about the network."""
 
 
+class BadBody(OSError):
+    """SEC answered, but with something other than the document (an error page with a 200): a failed fetch that can pass."""
+
+
 TRANSIENT = (OSError, http.client.HTTPException, EOFError, zlib.error)  # what a failed fetch can raise; NotFound is the exception
+
+
+def is_document(body: bytes) -> bool:
+    """False for a filing document that is empty or reads as an error page. None of 4,760 real press releases does either."""
+    return len(body) >= MIN_DOCUMENT_BYTES and not (len(body) <= ERROR_PAGE_BYTES and ERROR_PAGE.search(body))
 
 
 class RateLimiter:
@@ -146,17 +162,22 @@ class Client:
         parts = [re.sub(r"[^A-Za-z0-9._-]", "_", p) or "_" for p in rest.split("/")]
         return self.cache_dir.joinpath(*parts)
 
-    def get(self, url: str, max_age_s: float | None = None) -> bytes:
-        """The document at `url`, from the cache when it is there (and younger than `max_age_s`, when given)."""
+    def get(self, url: str, max_age_s: float | None = None, check: Callable[[bytes], bool] | None = None) -> bytes:
+        """The document at `url`, from the cache when it is there (and younger than `max_age_s`, when given). `check` says whether a
+        body is the document asked for: one that is not is a failed request, and is neither cached nor read from the cache."""
         if self._refused_url(url):
             raise restricted.RestrictedSymbolError(f"refused: {url} belongs to a restricted issuer")
         path = self.cache_path(url)
         if path.is_file() and (max_age_s is None or time.time() - path.stat().st_mtime <= max_age_s):
-            return path.read_bytes()
+            body = path.read_bytes()
+            if check is None or check(body):
+                return body
         for attempt in range(RETRIES + 1):
             self.limiter.wait()
             try:
                 body = self.transport(url)
+                if check is not None and not check(body):
+                    raise BadBody(f"not the document asked for: {url}")
                 break
             except NotFound:
                 raise
@@ -171,8 +192,20 @@ class Client:
         os.replace(tmp, path)
         return body
 
-    def get_json(self, url: str, max_age_s: float | None = None) -> dict:
-        return json.loads(self.get(url, max_age_s).decode("utf-8"))
+    def get_json(self, url: str, max_age_s: float | None = None, has: Callable[[object], bool] | None = None) -> dict:
+        """The parsed document. `has` says whether what parsed is the document asked for, and not valid JSON that says something else."""
+        parsed = []
+
+        def parses(body: bytes) -> bool:
+            try:
+                doc = json.loads(body.decode("utf-8"))
+            except ValueError:
+                return False
+            parsed[:] = [doc]
+            return has is None or has(doc)
+
+        self.get(url, max_age_s, check=parses)
+        return parsed[0]
 
     def _refused_url(self, url: str) -> bool:
         m = re.search(r"CIK(\d{10})|/edgar/data/(\d+)/", url)
@@ -182,7 +215,7 @@ class Client:
     def tickers(self, max_age_s: float | None = 7 * 86400) -> dict[str, dict]:
         """Ticker -> {"cik": int, "title": str}, from SEC's map (restricted entries removed and remembered)."""
         if self._tickers is None:
-            raw = self.get_json(TICKERS_URL, max_age_s)
+            raw = self.get_json(TICKERS_URL, max_age_s, has=_lists_tickers)
             out, bad = {}, set()
             for row in raw.values() if isinstance(raw, dict) else raw:
                 if not isinstance(row, dict) or "ticker" not in row:
@@ -220,7 +253,7 @@ class Client:
         return info["cik"] if info else None
 
     def submissions(self, cik: int, max_age_s: float | None = None) -> dict:
-        return self.get_json(submissions_url(cik), max_age_s)
+        return self.get_json(submissions_url(cik), max_age_s, has=_holds("filings"))
 
     def all_filings(self, cik: int, max_age_s: float | None = None, since: str | None = None) -> list[dict]:
         """Every filing of a company: `filings.recent` plus the older pages `filings.files` names (`recent` stops at about
@@ -233,7 +266,7 @@ class Client:
             if since and str(page.get("filingTo") or "9999") < since:
                 continue
             try:
-                rows += filing_rows(self.get_json(submissions_page_url(page["name"])))
+                rows += filing_rows(self.get_json(submissions_page_url(page["name"]), has=_holds("accessionNumber")))
             except NotFound as exc:  # SEC itself lists this page, so it is a hole and not a fact about the company
                 raise OSError(f"SEC lists {page['name']} but does not serve it") from exc
         seen, out = set(), []
@@ -245,14 +278,23 @@ class Client:
         return out
 
     def companyfacts(self, cik: int, max_age_s: float | None = None) -> dict:
-        return self.get_json(companyfacts_url(cik), max_age_s)
+        return self.get_json(companyfacts_url(cik), max_age_s, has=_holds("facts"))
 
     def filing_index(self, cik: int, accession: str) -> str:
         """The filing's index page (`<accession>-index.htm`), which lists every document with its type (EX-99.1 ...)."""
-        return self.get(archive_url(cik, accession, f"{accession}-index.htm")).decode("utf-8", "replace")
+        return self.get(archive_url(cik, accession, f"{accession}-index.htm"), check=lambda body: b"<table" in body.lower()).decode("utf-8", "replace")
 
     def document(self, cik: int, accession: str, name: str) -> bytes:
-        return self.get(archive_url(cik, accession, name))
+        return self.get(archive_url(cik, accession, name), check=is_document)
+
+
+def _holds(key: str) -> Callable[[object], bool]:
+    return lambda doc: isinstance(doc, dict) and key in doc
+
+
+def _lists_tickers(doc: object) -> bool:
+    rows = doc.values() if isinstance(doc, dict) else doc if isinstance(doc, list) else ()
+    return any(isinstance(row, dict) and "ticker" in row for row in rows)
 
 
 def submissions_url(cik) -> str:

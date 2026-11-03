@@ -183,14 +183,19 @@ def d7(k=10, keep_rank=30):
 
 
 def backtest_weights(panel: Panel, layer, ctx: Ctx, start: int, end: int, broker="avanza-mini", cash: float = 10_000.0,
-                     rebalance_every: int = 21, slippage: float = 0.0005, band: float = 0.03) -> Result:
+                     rebalance_every: int = 21, slippage: float = 0.0005, band: float = 0.03,
+                     splits: dict[int, list[tuple[int, float]]] | None = None) -> Result:
     """Runs sessions [start, end]. After the close of every `rebalance_every`-th session the layer proposes weights;
     at the next open a name is traded only if its weight is off target by more than `band` of the equity. A name with no
     close that session is valued at its last close, however long ago that was.
 
     A layer marked `never_resize` decides on whole names: a kept name is left alone at the open even after a gap past the
     band, and a name it let go is sold at any open it has, also below the volume gate, because the layer has already spent
-    that money on its replacement."""
+    that money on its replacement.
+
+    `splits` is for prices as they stood on each session, not adjusted afterwards: {row: [(column, factor)]}, a factor of 10 being a
+    10-for-1. Before that row's fills a holding becomes that many shares, its value unchanged and any fraction paid in cash, and a
+    "SPLIT" row in `trades` holds the change in shares. Without it nothing here changes."""
     broker = B.get(broker) if isinstance(broker, str) else broker
     N = panel.close.shape[1]
     qty, basis = np.zeros(N, int), np.zeros(N)
@@ -200,6 +205,14 @@ def backtest_weights(panel: Panel, layer, ctx: Ctx, start: int, end: int, broker
     pending = None
     for t in range(start, end + 1):
         fx = float(panel.usdsek[t])
+        for c, factor in (splits or {}).get(t, ()):
+            if qty[c]:
+                whole = int(qty[c] * factor + 1e-9)
+                cash += max(0.0, qty[c] * factor - whole) * last_px[c] / factor * fx
+                trades.append({"ts": str(panel.dates[t]), "symbol": panel.symbols[c], "side": "SPLIT", "qty": whole - int(qty[c]),
+                               "price": last_px[c] / factor, "fx": fx, "fee": 0.0, "pnl": 0.0})
+                qty[c] = whole
+            last_px[c] /= factor
         if pending is not None:
             target, pending = pending, None
             px_open = panel.open[t]

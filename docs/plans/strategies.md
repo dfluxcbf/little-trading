@@ -279,3 +279,5 @@ whole-share path: S3 made +94 % gross in B against +98 % net, because a few kron
 
 **S1-VALUE**, the value model, lost money in A and sits at the 3rd to 4th noise percentile there. By plan section 8, nothing here moves to the
 live system. Next by the same table is forward shadow scoring of `S3-NEWS` on a new card, which is the user's decision. No tuning after a fail.
+
+**The user chose forward shadow scoring of `S3-NEWS` on 2026-11-02, without trading on it:** card `docs/lab/cards/s3-news-shadow.md`, service `s3-news-shadow` (REQ-000000036), no look at the selection window and no holdout read.
