@@ -196,7 +196,9 @@ Otherwise the simpler model stands (plan section 8).
 **T2 to T4 are unchanged.** One look through `Ctx.window` with one purpose, recorded just before the first score, so a failed
 fetch or a coverage stop costs no look: same sign, at least half the effect, deflated Sharpe
 above 0 with the full ledger (229 on 2026-11-01, plus these 6), PBO below 0.5. Then at least 60 sessions in shadow, then
-the holdout once, for one finalist, with the user's approval.
+the holdout once, for one finalist, with the user's approval. On 2026-11-03 the user delegated the selection look, the holdout
+read and promotion to the scheduled task `improvingtrading`, under that task's rules (`improvements-lab.md` section 10). The
+other rules here stand, and a pass on `S3-NEWS` still goes back to the user, as its card says.
 
 **No tuning after a fail.** Any new try is a new card with new counted variants.
 

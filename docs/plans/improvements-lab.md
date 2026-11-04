@@ -299,6 +299,11 @@ loses (the bake-off rule). Reports are generated from `lab.db`, never typed.
 own service under the lab (section 3); lab dependencies are managed by the lab; only free data and tools; the design
 target is a starting account of 10,000 SEK.
 
+**Delegated by the user (2026-11-03):** the selection look, the holdout read and promotion are delegated to the scheduled
+task `improvingtrading`, under that task's rules. Promotion needs no further approval when T1, T2, T3 and T4 all pass. It
+changes only the paper account, and needs a committed rollback rule first. The user's approval in section 2 is met this way;
+every other rule in this plan stands. A pass on `S3-NEWS` still goes back to the user, as its card says.
+
 **Still open:**
 
 1. **EDGAR contact (H-I1, H-I2).** SEC asks that requests declare a user agent, and its example includes a contact email.
