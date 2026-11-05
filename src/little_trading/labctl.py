@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .lab.service import catalog
+from .lab.service import catalog, schedule
 from .lab.service.layout import Layout
 from .lab.service.registry import Registry
 
@@ -185,6 +185,8 @@ def delete(layout: Layout, purge: bool = False) -> dict:
 def set_schedule(layout: Layout, autostart: bool | None = None, window="unchanged") -> dict:
     if not layout.exists:
         raise LabDown("the lab does not exist yet (little-trading lab create)")
+    if autostart is None and window == "unchanged":  # only asking: nothing to write
+        return {k: layout.config()[k] for k in ("autostart", "window", "threads", "memory_mb")}
     if status(layout)["state"] == "running":
         res = request(layout, "config.set", {"autostart": autostart, "window": window})
         if not res.get("ok"):
@@ -210,13 +212,32 @@ def ensure_started(layout: Layout) -> bool:
     return False
 
 
-def overview(layout: Layout) -> dict:
+def _lost_slots(reg: Registry, now: datetime) -> list[dict]:
+    """With the lab down: the slot of each switched-on service that is past its grace, so the next start can only record it
+    as a gap. The supervisor's own rule (`schedule.decide`), so this names exactly the gaps a start would write. Nothing is
+    written here; the registry learns of them when the lab starts."""
+    lost = []
+    for s in reg.services():
+        if not s["enabled"] or s["schedule"].get("kind", "none") == "none":
+            continue
+        since = datetime.fromisoformat(s["scheduled_since"]) if s.get("scheduled_since") else None
+        last = reg.runs(s["id"], 1)
+        last_start = datetime.fromisoformat(last[0]["started_at"]) if last else None
+        decision = schedule.decide(s["schedule"], now, since, s.get("last_slot"), last_start)
+        if decision and decision[0] == "gap":
+            lost.append({"service_id": s["id"], "slot": decision[1]})
+    return lost
+
+
+def overview(layout: Layout, now: datetime | None = None) -> dict:
     """Everything the read-only Lab tab shows, read from the registry without the lab running."""
-    out: dict = {"lab": status(layout), "services": [], "ledger": [], "gaps": [], "events": [], "trials": 0}
+    out: dict = {"lab": status(layout), "services": [], "ledger": [], "gaps": [], "events": [], "trials": 0, "lost_slots": []}
     if not layout.exists:
         return out
     try:
         reg = Registry(layout.registry_file, readonly=True)
+        if out["lab"]["state"] not in ("running", "unresponsive"):
+            out["lost_slots"] = _lost_slots(reg, now or datetime.now(timezone.utc))
         for s in reg.services():
             last = reg.runs(s["id"], 1)
             out["services"].append({
@@ -327,6 +348,17 @@ def _ask(layout: Layout, cmd: str, args: dict | None = None) -> dict:
     return res
 
 
+def _read_registry(layout: Layout, read):
+    """Read-only, so gaps and events can be read while the lab is down, which is when they are wanted."""
+    if not layout.exists:
+        raise LabDown("the lab does not exist yet (little-trading lab create)")
+    reg = Registry(layout.registry_file, readonly=True)
+    try:
+        return read(reg)
+    finally:
+        reg.close()
+
+
 def _run(a, layout: Layout) -> int:
     c = a.cmd
     if c == "create":
@@ -364,8 +396,14 @@ def _run(a, layout: Layout) -> int:
             else:
                 print(f"lab {st['state']}")
                 if layout.exists:
+                    o = overview(layout)
+                    if st["state"] == "crashed":
+                        print(f"  last heartbeat {st.get('last_heartbeat')}; nothing runs until: little-trading lab start")
+                    if o["lost_slots"]:
+                        print(f"  {len(o['lost_slots'])} slots passed while it was down and will be gaps: "
+                              + ", ".join(f"{g['service_id']} {g['slot'][:16]}" for g in o["lost_slots"]))
                     print(_services_table([{**s, "state": "stopped" if not s["enabled"] else "scheduled",
-                                            "schedule": s["schedule"].get("kind", "off")} for s in overview(layout)["services"]]))
+                                            "schedule": s["schedule"].get("kind", "off")} for s in o["services"]]))
     elif c == "card":
         from .lab import cards
         problems = cards.check(Path(a.file).read_text())
@@ -380,10 +418,10 @@ def _run(a, layout: Layout) -> int:
         for row in r["ledger"]:
             print(f"  {row['ts'][:16]} {row['service_id']:20} {row['variants']:3} variants {row['status']:10} {row['hypothesis']}")
     elif c == "gaps":
-        for g in _ask(layout, "gaps.list", {"id": a.service})["gaps"]:
+        for g in _read_registry(layout, lambda reg: reg.gaps(a.service, 100)):
             print(f"  {g['service_id']:20} slot {g['slot']} noted {g['noted_at'][:16]}: {g['reason']}")
     elif c == "events":
-        for e in reversed(_ask(layout, "events.list")["events"]):
+        for e in reversed(_read_registry(layout, lambda reg: reg.events(30))):
             print(f"  {e['ts'][:19]} {e['kind']:8} {e['service_id'] or '-':18} {e['message']}")
     elif c == "service":
         return _service(a, layout)

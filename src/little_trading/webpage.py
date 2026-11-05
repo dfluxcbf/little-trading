@@ -270,6 +270,8 @@ const views = {
     const sched = s => s.kind === "daily_after_close" ? `weekdays, close + ${s.minutes} min` : s.kind === "every" ? `every ${s.seconds} s` : s.kind === "once" ? `once ${s.at}` : "off";
     return `<div class="card"><h2>Lab</h2><p>The lab is a separate service that tests alternatives and improvements beside the live system. It never trades and never writes to this database. <span class="chip">${esc(st.state || "unknown")}</span>
       <span class="muted">${lab.trials || 0} trials counted in the ledger. Controls are in the command line: <code>little-trading lab --help</code>.</span></p>
+      ${st.state === "crashed" ? `<p class="down">The lab is down, and nothing is scored until <code>little-trading lab start</code>.</p>` : ""}
+      ${(lab.lost_slots || []).length ? `<p class="down">${lab.lost_slots.length} slots passed while it was down and will be gaps: ${lab.lost_slots.map(g => esc(g.service_id)).join(", ")}.</p>` : ""}
       ${lab.error ? `<p class="down">${esc(lab.error)}</p>` : ""}</div>
       <div class="card"><h2>Services</h2><table><tr><th>Service</th><th>Kind</th><th>Switched on</th><th>Schedule</th><th>Environment</th><th>Last run</th></tr>
       ${(lab.services || []).map(v => `<tr><td><b>${esc(v.id)}</b><br><span class="muted">${esc(v.title)}</span></td><td>${esc(v.kind)}</td><td>${v.enabled ? "yes" : "no"}</td><td>${esc(sched(v.schedule))}</td><td>${esc(v.env)}</td>

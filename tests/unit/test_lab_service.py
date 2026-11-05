@@ -728,3 +728,72 @@ def test_shadow_champion_scores_each_new_session_once_with_no_look_ahead(tmp_pat
 def test_restricted_issuers_are_excluded_by_the_builtin_list():
     for sym in ("NVDA", "GOOGL", "VOLV-B.ST"):
         assert restricted.load().reason(sym)
+
+
+# --- a lab that is down says so ------------------------------------------------------------------------------------------
+def _crashed_lab(lay, now):
+    labctl.create(lay)
+    reg = Registry(lay.registry_file)
+    reg.update_service("snapshot", enabled=1, schedule={"kind": "daily_after_close", "minutes": 60},
+                       scheduled_since=(now - timedelta(days=5)).isoformat())
+    reg.update_service("shadow-champion", enabled=0, schedule={"kind": "daily_after_close", "minutes": 90})
+    reg.set_meta("running", "2026-11-03T06:00:00+00:00")
+    reg.set_meta("heartbeat", "2026-11-04T20:00:00+00:00")
+    reg.add_gap("snapshot", "2026-10-30T21:00:00+00:00", "an old gap")
+    reg.event("lab", "an old event")
+    reg.close()
+
+
+@pytest.mark.requirement("REQ-000000037")
+def test_a_crashed_lab_names_the_slots_a_start_can_only_record_as_gaps(tmp_path):
+    lay = Layout(str(tmp_path / "d"))
+    # Wednesday 4 November 2026: the slot is 22:00 UTC and the grace is 6 hours.
+    in_grace = datetime(2026, 11, 5, 3, 0, tzinfo=UTC)
+    past_grace = datetime(2026, 11, 5, 6, 30, tzinfo=UTC)
+    _crashed_lab(lay, past_grace)
+    assert labctl.status(lay)["state"] == "crashed"
+    assert labctl.overview(lay, now=in_grace)["lost_slots"] == []  # a start now still runs it
+    lost = labctl.overview(lay, now=past_grace)["lost_slots"]
+    assert [g["service_id"] for g in lost] == ["snapshot"]  # the service that is off is not lost
+    assert lost[0]["slot"].startswith("2026-11-04T22:00")
+    reg = Registry(lay.registry_file, readonly=True)
+    assert len(reg.gaps("snapshot")) == 1  # the old one: reading writes nothing
+    reg.close()
+
+
+@pytest.mark.requirement("REQ-000000037")
+def test_a_running_lab_reports_no_lost_slots(real_lab):
+    labctl.create(real_lab)
+    labctl.start(real_lab)
+    assert labctl.overview(real_lab)["lost_slots"] == []
+
+
+@pytest.mark.requirement("REQ-000000037")
+def test_status_gaps_and_events_answer_while_the_lab_is_down(tmp_path, capsys):
+    lay = Layout(str(tmp_path / "d"))
+    d = str(lay.data_dir)
+    assert cli.main(["lab", "--data-dir", d, "gaps"]) == 1  # no lab yet
+    assert "does not exist" in capsys.readouterr().err
+    _crashed_lab(lay, datetime.now(UTC))
+    assert cli.main(["lab", "--data-dir", d, "status"]) == 0
+    out = capsys.readouterr().out
+    assert "lab crashed" in out and "little-trading lab start" in out
+    assert cli.main(["lab", "--data-dir", d, "gaps"]) == 0 and "an old gap" in capsys.readouterr().out
+    assert cli.main(["lab", "--data-dir", d, "gaps", "shadow-champion"]) == 0 and "an old gap" not in capsys.readouterr().out
+    assert cli.main(["lab", "--data-dir", d, "events"]) == 0 and "an old event" in capsys.readouterr().out
+
+
+@pytest.mark.requirement("REQ-000000037")
+def test_asking_for_the_schedule_writes_nothing(tmp_path):
+    lay = Layout(str(tmp_path / "d"))
+    labctl.create(lay)
+    before = {f: f.stat().st_mtime_ns for f in lay.root.iterdir() if f.is_file() and f.name.endswith(".json")}
+    assert before  # the config file
+    assert labctl.set_schedule(lay)["autostart"] is False
+    assert {f: f.stat().st_mtime_ns for f in before} == before
+
+
+@pytest.mark.requirement("REQ-000000037")
+def test_the_lab_tab_warns_when_the_lab_is_down():
+    from little_trading import webpage
+    assert "lost_slots" in webpage.PAGE and 'st.state === "crashed"' in webpage.PAGE

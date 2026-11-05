@@ -70,7 +70,8 @@ touch the live server. The lab manages **services**, one per alternative or impr
   import of a service and refuses it if it can reach the engine, server, store, web or data-fetching code.
 - Lab-wide caps: 8 threads and 5 GB by default, at low priority, so the live training round is not starved.
 - The live web app has a read-only Lab tab (`/api/lab`, read from the registry). Autostart with the live server is off by
-  default and never raises.
+  default and never raises. With the lab down, `lab status` and the Lab tab name the slots already past their grace, which
+  a start can only record as gaps (REQ-000000037); `lab gaps` and `lab events` read the registry, so they work then too.
 - Foundations (REQ-000000024): `little-trading lab ledger seed` counts each run of the bake-off database as one trial
   (once only; the file is only read). `lab/leakcheck.py` is the future-perturbation test: a feature or score function
   must give the same output up to a cut when the later data is scrambled or deleted. `lab/cards.py` checks the
