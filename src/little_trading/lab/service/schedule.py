@@ -53,6 +53,13 @@ def parse(spec: str) -> dict:
     raise ScheduleError(f"unknown schedule {spec!r}: use off, 'every 6h', 'daily-after-close+90m' or 'once <time>Z'")
 
 
+def resting_state(enabled: bool, sched: dict, ran: bool) -> str:
+    """The state of a service with no run in progress, as `lab status` shows it, running or not."""
+    if not enabled:
+        return "stopped" if ran else "created"
+    return "scheduled" if sched.get("kind", "none") != "none" else "idle"
+
+
 def describe(sched: dict) -> str:
     kind = sched.get("kind")
     if kind == "every":

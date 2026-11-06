@@ -402,8 +402,9 @@ def _run(a, layout: Layout) -> int:
                     if o["lost_slots"]:
                         print(f"  {len(o['lost_slots'])} slots passed while it was down and will be gaps: "
                               + ", ".join(f"{g['service_id']} {g['slot'][:16]}" for g in o["lost_slots"]))
-                    print(_services_table([{**s, "state": "stopped" if not s["enabled"] else "scheduled",
-                                            "schedule": s["schedule"].get("kind", "off")} for s in o["services"]]))
+                    print(_services_table([{**s, "schedule": schedule.describe(s["schedule"]),
+                                            "state": schedule.resting_state(s["enabled"], s["schedule"], bool(s["last_run"]))}
+                                           for s in o["services"]]))
     elif c == "card":
         from .lab import cards
         problems = cards.check(Path(a.file).read_text())

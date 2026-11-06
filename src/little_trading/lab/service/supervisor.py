@@ -372,10 +372,8 @@ class Supervisor:
         running = self._running_run(s["id"])
         if running:
             state = "running"
-        elif not s["enabled"]:
-            state = "created" if not last else "stopped"
         else:
-            state = "scheduled" if s["schedule"].get("kind", "none") != "none" else "idle"
+            state = schedule.resting_state(bool(s["enabled"]), s["schedule"], bool(last))
         due = schedule.next_due(s["schedule"], self.clock(), datetime.fromisoformat(last[0]["started_at"]) if last else None)
         return {"id": s["id"], "title": s["title"], "hypothesis": s["hypothesis"], "kind": s["kind"], "state": state,
                 "enabled": bool(s["enabled"]), "schedule": schedule.describe(s["schedule"]),

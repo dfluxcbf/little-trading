@@ -797,3 +797,30 @@ def test_asking_for_the_schedule_writes_nothing(tmp_path):
 def test_the_lab_tab_warns_when_the_lab_is_down():
     from little_trading import webpage
     assert "lost_slots" in webpage.PAGE and 'st.state === "crashed"' in webpage.PAGE
+
+
+# --- REQ-000000038: A down lab shows each service as the running lab would ---
+@pytest.mark.requirement("REQ-000000038")
+def test_a_down_lab_shows_states_and_schedules_as_the_running_lab_does(tmp_path, capsys):
+    lay = Layout(str(tmp_path / "d"))
+    _crashed_lab(lay, datetime.now(UTC))
+    reg = Registry(lay.registry_file)
+    reg.add_service({"id": "exp", "title": "t", "hypothesis": "H-X", "kind": "experiment", "entry": "labtest_svc",
+                     "config": {}, "env": "stdlib", "schedule": {"kind": "none"}, "resources": catalog.DEFAULT_RESOURCES})
+    reg.update_service("exp", enabled=1)
+    reg.close()
+    assert cli.main(["lab", "--data-dir", str(lay.data_dir), "status"]) == 0
+    rows = {line.split()[0]: line.split() for line in capsys.readouterr().out.splitlines()
+            if line.startswith("  ") and len(line.split()) > 3}
+    assert rows["snapshot"][1] == "scheduled" and "weekdays, close + 60 min" in " ".join(rows["snapshot"])
+    assert rows["shadow-champion"][1] == "created"  # switched off and never run
+    assert rows["exp"][1] == "idle" and rows["exp"][3] == "off"  # on, but nothing scheduled
+
+
+@pytest.mark.requirement("REQ-000000038")
+def test_the_resting_state_rule_is_shared_by_the_running_and_the_down_lab():
+    assert schedule.resting_state(False, {"kind": "daily_after_close", "minutes": 60}, False) == "created"
+    assert schedule.resting_state(False, {"kind": "none"}, True) == "stopped"
+    assert schedule.resting_state(True, {"kind": "daily_after_close", "minutes": 60}, True) == "scheduled"
+    assert schedule.resting_state(True, {"kind": "none"}, False) == "idle"
+    assert schedule.resting_state(True, {}, False) == "idle"
