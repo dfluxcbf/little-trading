@@ -9,3 +9,4 @@ MODULE.bazel.lock
 .claude/settings.local.json
 .claude/worktrees/
 runs/
+.lvx/state.json
